@@ -1,0 +1,5 @@
+yt-dlp>=2024.0
+youtube-transcript-api>=0.6
+openai-whisper>=20231117
+requests>=2.31
+python-dotenv>=1.0

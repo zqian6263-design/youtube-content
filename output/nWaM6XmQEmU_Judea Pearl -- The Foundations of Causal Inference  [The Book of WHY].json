@@ -1,0 +1,8 @@
+{
+  "source": "whisper",
+  "model": "small",
+  "device": "cpu",
+  "language": "en",
+  "duration_sec": 7271,
+  "transcript_file": "C:\\Users\\win\\AppData\\Local\\hermes\\skills\\media\\youtube-content\\output\\nWaM6XmQEmU_Judea Pearl -- The Foundations of Causal Inference  [The Book of WHY].txt"
+}
