@@ -4,8 +4,17 @@
 const API = 'http://127.0.0.1:8080/api/quick';
 
 function getVideoId() {
-  const m = window.location.pathname.match(/^\/watch/) && new URLSearchParams(window.location.search).get('v');
-  return m || null;
+  // YouTube
+  if (window.location.hostname.includes('youtube.com')) {
+    const m = window.location.pathname.match(/^\/watch/) && new URLSearchParams(window.location.search).get('v');
+    return m || null;
+  }
+  // Bilibili
+  if (window.location.hostname.includes('bilibili.com')) {
+    const m = window.location.pathname.match(/BV[a-zA-Z0-9]+/);
+    return m ? m[0] : null;
+  }
+  return null;
 }
 
 function makeButton() {
@@ -140,8 +149,16 @@ function escapeHtml(s) {
 function inject() {
   if (!getVideoId()) return;
   if (document.getElementById('yt-summary-btn')) return;
-  const h1 = document.querySelector('h1.ytd-watch-metadata');
-  const target = h1 ? h1.parentElement : document.querySelector('#title h1');
+  let target = null;
+  if (window.location.hostname.includes('youtube.com')) {
+    const h1 = document.querySelector('h1.ytd-watch-metadata');
+    target = h1 ? h1.parentElement : document.querySelector('#title h1');
+  } else if (window.location.hostname.includes('bilibili.com')) {
+    // Bilibili: title bar next to the video title
+    const h1 = document.querySelector('h1.video-title') ||
+               document.querySelector('.video-info-title');
+    target = h1 ? h1.parentElement : document.querySelector('#viewbox_report');
+  }
   if (target) {
     target.appendChild(makeButton());
   }

@@ -1127,6 +1127,43 @@ def test_analyze_detect_bilibili():
     print('  ✅ test_analyze_detect_bilibili')
 
 
+def test_bilibili_cookies_file():
+    """Netscape cookie file generated from skill .env (or None gracefully)."""
+    import os
+    import tempfile
+
+    import pipeline as pl
+
+    # Mock skill dir with a fake .env
+    with tempfile.TemporaryDirectory() as td:
+        env = Path(td) / '.env'
+        env.write_text('BILIBILI_SESSDATA=abc123\nBILIBILI_BILI_JCT=xyz\n'
+                       'BILIBILI_DEDE_USERID=123\n', encoding='utf-8')
+        orig_env = os.environ.get('BILIBILI_SKILL_DIR')
+        os.environ['BILIBILI_SKILL_DIR'] = td
+        try:
+            p = pl._bilibili_cookies_file()
+            assert p, "cookies file should be generated"
+            txt = Path(p).read_text(encoding='utf-8')
+            assert 'SESSDATA	abc123' in txt
+            assert 'bili_jct	xyz' in txt
+            Path(p).unlink(missing_ok=True)
+        finally:
+            if orig_env:
+                os.environ['BILIBILI_SKILL_DIR'] = orig_env
+            else:
+                os.environ.pop('BILIBILI_SKILL_DIR', None)
+
+        # Missing .env → None
+        with tempfile.TemporaryDirectory() as td2:
+            os.environ['BILIBILI_SKILL_DIR'] = td2
+            try:
+                assert pl._bilibili_cookies_file() is None
+            finally:
+                os.environ.pop('BILIBILI_SKILL_DIR', None)
+    print('  ✅ test_bilibili_cookies_file')
+
+
 def test_detect_chapters_full_pipeline():
     from chapters import detect_chapters, parse_subtitles
     # Simulate a 10-min video with 3 distinct topics
@@ -1223,6 +1260,7 @@ def run_all():
         test_clean_transcript_text,
         test_bilibili_extract_bvid,
         test_analyze_detect_bilibili,
+        test_bilibili_cookies_file,
     ]
     failures = 0
     for t in tests:

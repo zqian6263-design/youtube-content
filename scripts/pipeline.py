@@ -19,6 +19,7 @@ Flags passed to analyze: --chapters, --translate, --timestamps (see below).
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
@@ -82,9 +83,56 @@ def list_new_videos(channel_cfg: dict, languages: str) -> tuple:
     return new_videos, cache
 
 
+def _bilibili_cookies_file() -> str | None:
+    """
+    Write Bilibili cookies (from the bilibili-content skill .env) to a
+    Netscape-format temp file for yt-dlp. Returns path or None.
+    """
+    import tempfile as _tf
+
+    skill_dir_env = os.environ.get('BILIBILI_SKILL_DIR', '')
+    skill_dir = Path(skill_dir_env) if skill_dir_env else None
+    if skill_dir is None or not skill_dir.exists():
+        candidates = [
+            Path.home() / 'AppData' / 'Local' / 'hermes' / 'skills' / 'media' / 'bilibili-content',
+            Path.home() / '.hermes' / 'skills' / 'media' / 'bilibili-content',
+        ]
+        skill_dir = next((p for p in candidates if (p / '.env').exists()), None)
+    if not skill_dir:
+        return None
+
+    env = {}
+    env_file = skill_dir / '.env'
+    if not env_file.exists():
+        return None
+    for line in env_file.read_text(encoding='utf-8').splitlines():
+        line = line.strip()
+        if line and not line.startswith('#') and '=' in line:
+            k, v = line.split('=', 1)
+            env[k.strip()] = v.strip()
+
+    sess = env.get('BILIBILI_SESSDATA', '')
+    jct = env.get('BILIBILI_BILI_JCT', '')
+    dede = env.get('BILIBILI_DEDE_USERID', '')
+    if not sess or not jct:
+        return None
+
+    content = '# Netscape HTTP Cookie File\n'
+    for name, val in (('SESSDATA', sess), ('bili_jct', jct), ('DedeUserID', dede)):
+        if val:
+            content += f'.bilibili.com\tTRUE\t/\tTRUE\t0\t{name}\t{val}\n'
+    fd, path = _tf.mkstemp(suffix='.txt', prefix='bili_cookies_')
+    with os.fdopen(fd, 'w', encoding='utf-8') as f:
+        f.write(content)
+    return path
+
+
 def list_playlist_videos(pl_cfg: dict, languages: str) -> tuple:
     """
     List videos for a playlist URL, filtering out cached ones.
+
+    Also handles Bilibili space/collection URLs (yt-dlp supports them,
+    with cookies injected from the bilibili-content skill).
 
     Returns (videos, cache).
     """
@@ -99,10 +147,21 @@ def list_playlist_videos(pl_cfg: dict, languages: str) -> tuple:
 
     cmd = ['yt-dlp', '--quiet', '--no-warnings', '--flat-playlist',
            '--print', '%(playlist_index)s\t%(id)s\t%(title)s', pl_url]
+    cookie_file = None
+    if 'bilibili.com' in pl_url or 'b23.tv' in pl_url:
+        cookie_file = _bilibili_cookies_file()
+        if cookie_file:
+            cmd += ['--cookies', cookie_file]
     try:
         result = _sp.run(cmd, capture_output=True, text=True, timeout=120)
     except _sp.TimeoutExpired:
         return [], None
+    finally:
+        if cookie_file:
+            try:
+                Path(cookie_file).unlink(missing_ok=True)
+            except OSError:
+                pass
     if result.returncode != 0:
         return [], None
 
@@ -128,6 +187,7 @@ def list_playlist_videos(pl_cfg: dict, languages: str) -> tuple:
             continue
         new_videos.append(v)
     return new_videos, cache
+
 
 
 def process_video(video: dict, args, languages: str) -> dict:
