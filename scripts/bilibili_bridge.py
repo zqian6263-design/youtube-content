@@ -164,6 +164,47 @@ def transcribe_audio(wav_path: Path, model: str, device: str,
         return {"status": "failed", "message": result.stdout[:200]}
 
 
+def verify_subtitle_match(title: str, transcript: str) -> tuple:
+    """
+    LLM check: does the subtitle content actually belong to this video?
+
+    Bilibili AI subtitles intermittently return mismatched content
+    (wrong video's subtitles). Returns (matched: bool, reason: str).
+    Skips (True, '') when no API key is available.
+    """
+    try:
+        from youtube_utils import load_env
+        load_env()
+        import types as _types
+
+        from translate import call_llm, resolve_api_key
+    except ImportError:
+        return True, ''
+
+    key = resolve_api_key(_types.SimpleNamespace(api_key=None))
+    if not key:
+        return True, ''
+
+    system = (
+        '你是视频字幕质检员。判断给定的"字幕开头"是否与"视频标题"主题一致。'
+        '只回答 JSON：{"match": true/false, "reason": "简短中文原因"}。'
+    )
+    user = (f'视频标题: {title}\n\n'
+            f'字幕开头（前 400 字符）:\n{transcript[:400]}')
+    try:
+        out = call_llm(key, 'https://api.deepseek.com/v1', 'deepseek-chat',
+                       system, user, timeout=60)
+        import json as _json
+        import re as _re
+        m = _re.search(r'\{.*\}', out, _re.S)
+        if m:
+            d = _json.loads(m.group(0))
+            return bool(d.get('match', True)), str(d.get('reason', ''))[:100]
+    except Exception:
+        pass
+    return True, ''
+
+
 def main():
     parser = argparse.ArgumentParser(description='Bilibili adapter')
     parser.add_argument('video', help='BV号 or bilibili URL')
@@ -172,6 +213,8 @@ def main():
     parser.add_argument('--force-whisper', action='store_true',
                         help='Always transcribe (skip subtitle check)')
     parser.add_argument('--timestamps', action='store_true')
+    parser.add_argument('--no-verify', action='store_true',
+                        help='Skip subtitle-vs-title consistency check')
     parser.add_argument('--model', default=os.environ.get('WHISPER_MODEL', 'small'))
     parser.add_argument('--device', default=os.environ.get('WHISPER_DEVICE', 'cpu'))
     parser.add_argument('--language', default='zh')
@@ -195,6 +238,22 @@ def main():
         transcript = (sub.get('transcript') or sub.get('subtitles')
                       or sub.get('text') or '') if has_subs else ''
         if has_subs and transcript:
+            # Verify AI-subtitle content matches the video title
+            # (bilibili AI subtitles intermittently mismatch)
+            if not getattr(args, 'no_verify', False) and transcript:
+                matched, reason = verify_subtitle_match(
+                    sub.get('title') or bvid, transcript)
+                if not matched:
+                    print(json.dumps({
+                        "status": "needs_confirmation",
+                        "video_id": bvid,
+                        "message": ("⚠ 检测到字幕内容与视频标题不匹配"
+                                    "（B站 AI 字幕错配）。建议用 Whisper 转写。"),
+                        "detail": reason,
+                        "next_command": f"--whisper {bvid}",
+                        "next_flags": ["--whisper"],
+                    }, ensure_ascii=False))
+                    return
             result = {
                 "status": "success",
                 "source": "bilibili_caption",
