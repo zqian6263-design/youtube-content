@@ -2,23 +2,20 @@
 
 # 🎬 YouTube Content Tool
 
-**一键提取 YouTube 视频字幕 / 音频转写工具**  
-无需 API Key · 无需 Cookie · 开箱即用
+**一键提取 YouTube 字幕 / Whisper 音频转写 / 章节检测 / 翻译 全家桶**
 
 [![Python](https://img.shields.io/badge/Python-3.9+-blue?logo=python)](https://python.org)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen)](https://github.com/zqian6263-design/youtube-content/pulls)
-[![Stars](https://img.shields.io/github/stars/zqian6263-design/youtube-content?style=social)](https://github.com/zqian6263-design/youtube-content)
+[![CI](https://img.shields.io/badge/CI-GitHub%20Actions-blue)](https://github.com/zqian6263-design/youtube-content/actions)
+[![Tests](https://img.shields.io/badge/tests-39%20passed-brightgreen)](tests/test_youtube_utils.py)
 
 <p align="center">
   <img src="https://img.shields.io/badge/字幕-✅%20自动提取-blue?style=for-the-badge" />
   <img src="https://img.shields.io/badge/Whisper-🎙%20音频转写-orange?style=for-the-badge" />
-  <img src="https://img.shields.io/badge/yt--dlp-⬇️%20兜底下载-red?style=for-the-badge" />
+  <img src="https://img.shields.io/badge/章节-📑%20自动检测-green?style=for-the-badge" />
+  <img src="https://img.shields.io/badge/翻译-🌐%20LLM%20支持-purple?style=for-the-badge" />
 </p>
-
----
-
-**🌏 [English](README.md) | [中文](README.md)**
 
 </div>
 
@@ -28,13 +25,17 @@
 
 | 特性 | 说明 |
 |------|------|
-| 🎯 **一键提取** | 支持 YouTube 链接 / youtu.be / 视频 ID，自动提取字幕 |
-| 📡 **双引擎兜底** | youtube-transcript-api 优先，yt-dlp 字幕提取作为 fallback |
-| 🎙 **Whisper 转写** | 无字幕视频自动下载音频并用 OpenAI Whisper 转写 |
-| 🌐 **多语言** | 支持中/英/日等多语言字幕优先级选择 |
-| ⏱ **时间戳** | 支持输出带时间轴的全文 |
-| 🆓 **零配置** | 无需 API Key、无需 Cookie、无需注册 |
-| 🚀 **即装即用** | `pip install` + 一条命令搞定 |
+| 🎯 **一键提取** | 支持链接 / 短链接 / 视频 ID / 播放列表，自动提取字幕 |
+| 📡 **双引擎兜底** | youtube-transcript-api 优先 → yt-dlp 兜底，云 IP 被封也能用 |
+| 🎙 **Whisper 转写** | 无字幕视频自动下载音频转写；支持 openai-whisper / faster-whisper 双后端 |
+| ⚡ **分块并行** | 长视频自动切块多进程并行转写（CPU 快 4-6 倍） |
+| 📑 **章节检测** | TextTiling 算法自动分割话题，输出带时间戳的章节目录 |
+| 🎬 **格式转换** | SRT / VTT / LRC / TXT 一键互转（剪映、Premiere、播放器、歌词） |
+| 🌐 **LLM 翻译** | 字幕自动翻译成中文/日文等（DeepSeek / OpenAI 兼容 API） |
+| ⏱ **时间范围** | `--from 10:00 --to 20:00` 只处理指定片段 |
+| 👥 **双语字幕** | 中英双语时间轴对齐交错输出，学外语神器 |
+| 💾 **智能缓存** | SQLite 缓存字幕和转写结果，重复分析秒回 |
+| 🆓 **零配置** | 基础功能无需 API Key、无需 Cookie |
 
 ---
 
@@ -43,17 +44,16 @@
 ### 安装
 
 ```bash
-# 1. 克隆仓库
+# 方式 1：克隆仓库
 git clone https://github.com/zqian6263-design/youtube-content.git
 cd youtube-content
-
-# 2. 安装依赖
 pip install -r requirements.txt
 
-# 3. （可选）安装 ffmpeg — Whisper 音频转写需要
-# Windows: winget install ffmpeg
-# macOS:   brew install ffmpeg
-# Linux:   sudo apt install ffmpeg
+# 方式 2：pip 直接安装（v0.8.0 起支持）
+pip install .
+
+# 需要 ffmpeg（Whisper 转写）：
+#   Windows: winget install ffmpeg    macOS: brew install ffmpeg    Linux: sudo apt install ffmpeg
 ```
 
 ### 基础用法
@@ -62,121 +62,125 @@ pip install -r requirements.txt
 # 📝 提取字幕（最快，推荐）
 python scripts/analyze_youtube.py "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
 
-# 也支持短链接和纯 ID
+# 支持短链接 / 纯 ID / 播放列表
 python scripts/analyze_youtube.py "https://youtu.be/dQw4w9WgXcQ"
 python scripts/analyze_youtube.py "dQw4w9WgXcQ"
+python scripts/analyze_youtube.py "https://www.youtube.com/playlist?list=PLxxx" --playlist --max 10
 ```
 
-输出文件保存在 `output/` 目录：
+输出文件保存在 `output/`：
 - `{视频ID}_{标题}.txt` — 纯文本字幕
-- `{视频ID}_{标题}.json` — 元数据
-
-### 🎙 自动转写（无字幕视频）
-
-```bash
-# 有字幕→提取，无字幕→Whisper 转写
-python scripts/analyze_youtube.py "https://youtu.be/xxx" --auto
-
-# 或者强制从音频转写
-python scripts/analyze_youtube.py "https://youtu.be/xxx" --force-whisper
-```
+- `{视频ID}_{标题}.json` — 元数据（含精确 segments）
 
 ---
 
-## 📋 完整命令参考
+## 📋 命令参考
 
-| 命令 | 说明 |
+| 场景 | 命令 |
 |------|------|
-| `analyze_youtube.py <URL>` | 默认模式：有字幕就提取，没有就询问 |
-| `--whisper` | 有字幕→提取，无字幕→自动转写（不询问） |
-| `--auto` | 全自动模式：字幕优先，Whisper 兜底 |
-| `--force-whisper` | 跳过字幕，直接从音频转写 |
-| `--timestamps` | 输出带时间轴的字幕 |
-| `--languages zh-Hans,en` | 字幕语言优先级（默认: 中文→英文） |
-| `--whisper-language en` | Whisper 转写语言（auto=自动检测） |
-| `--device cpu` | 用 CPU 运行 Whisper（无 GPU 时必选） |
-| `--whisper-model base` | Whisper 模型大小（tiny/base/small/medium/large） |
+| 提取字幕 | `python scripts/analyze_youtube.py "URL"` |
+| 无字幕→Whisper 转写 | `python scripts/analyze_youtube.py "URL" --auto` |
+| 强制音频转写 | `python scripts/analyze_youtube.py "URL" --force-whisper` |
+| 长视频并行加速 | `python scripts/analyze_youtube.py "URL" --force-whisper --chunk-minutes 10 --chunk-workers 4` |
+| faster-whisper（4倍速） | `python scripts/analyze_youtube.py "URL" --auto --backend faster-whisper` |
+| 章节自动检测 | `python scripts/analyze_youtube.py "URL" --chapters` |
+| 转 SRT / VTT / LRC | `python scripts/analyze_youtube.py "URL" --format srt` |
+| 翻译成中文 | `export DEEPSEEK_API_KEY=sk-xxx && python scripts/analyze_youtube.py "URL" --translate` |
+| 只处理某段 | `python scripts/analyze_youtube.py "URL" --from 10:00 --to 20:00` |
+| 双语字幕 | `python scripts/analyze_youtube.py "URL" --languages zh-Hans,en --bilingual --timestamps` |
+| 播放列表批量 | `python scripts/analyze_youtube.py "URL" --playlist --max 5` |
 
-### 实用组合
+### 常用参数
 
-```bash
-# 💡 推荐：字幕 + Whisper 自动兜底 + CPU
-python scripts/analyze_youtube.py "URL" --auto --device cpu
-
-# 💡 英文视频最佳实践
-python scripts/analyze_youtube.py "URL" --auto --languages en --whisper-language auto
-
-# 💡 重要内容：跳过字幕，直接从音频转写
-python scripts/analyze_youtube.py "URL" --force-whisper --device cpu
-```
+| 参数 | 说明 |
+|------|------|
+| `--auto` | 有字幕→提取，无字幕→自动转写 |
+| `--force-whisper` | 强制走音频转写 |
+| `--device auto/cpu/cuda` | Whisper 设备（默认 auto 自动检测） |
+| `--backend openai/faster-whisper` | 转写后端 |
+| `--chunk-minutes N` | 长视频分块大小（分钟） |
+| `--chapters` | 章节检测 |
+| `--format srt/vtt/lrc/txt` | 字幕格式转换 |
+| `--translate` / `--translate-target` | LLM 翻译及目标语言 |
+| `--from/--to` | 时间范围（90、01:30、1:02:30） |
+| `--playlist --max N` | 播放列表批量处理 |
 
 ---
 
 ## 🏗 架构
 
 ```
-analyze_youtube.py (入口)
-  ├─ 1. fetch_subtitle_youtube.py
-  │   ├─ 优先: youtube-transcript-api
-  │   ├─ 兜底: yt-dlp 字幕提取
-  │   └─ 失败 → 进入 Whisper 模式
-  ├─ 2. fetch_audio_youtube.py
-  │   ├─ yt-dlp 下载最佳音频流
-  │   └─ ffmpeg 转 16kHz mono WAV
-  └─ 3. transcribe_whisper.py
-      └─ Whisper 模型转写 → 输出字幕
+┌─────────────────────────────────────────────────────┐
+│                 analyze_youtube.py                  │
+│             （统一入口，模式分发）                      │
+└──────────────┬──────────────────────────┬───────────┘
+               │ 字幕路径                   │ 转写路径
+               ▼                           ▼
+┌──────────────────────────┐   ┌──────────────────────────┐
+│  fetch_subtitle_youtube  │   │  fetch_audio_youtube     │
+│  transcript-api → yt-dlp │   │  yt-dlp 下载 + ffmpeg    │
+│  双引擎兜底 + 双语        │   │  时间范围下载              │
+└────────────┬─────────────┘   └────────────┬─────────────┘
+             ▼                              ▼
+   ┌──────────────────┐          ┌──────────────────┐
+   │  convert_subtitles│          │ transcribe_whisper│
+   │  SRT/VTT/LRC/TXT │          │ openai/faster     │
+   └────────┬─────────┘          │ 分块并行           │
+            ▼                    └────────┬─────────┘
+   ┌──────────────────┐                   ▼
+   │   translate.py    │◄───────── 字幕/转写结果
+   │   LLM 翻译         │
+   └──────────────────┘
+            ▼
+   ┌──────────────────────────────────────────────┐
+   │  chapters.py（章节检测）· cache.py（SQLite 缓存） │
+   └──────────────────────────────────────────────┘
 ```
 
-### 错误处理速查
+---
 
-| 错误阶段 | 含义 | 解决 |
-|---------|------|------|
-| `no_captions` | 无字幕可用 | 加 `--auto` 用 Whisper |
-| `download` | 音频下载失败 | 检查网络/URL |
-| `ffmpeg` | 格式转换失败 | `brew install ffmpeg` / `winget install ffmpeg` |
-| `whisper` | 转写失败 | 加 `--device cpu` 或用 `--whisper-model base` |
+## 📝 示例输出
+
+### 章节检测（Judea Pearl 因果推断演讲，2 小时）
+
+```json
+{
+  "chapters": [
+    {"start": 0.0,  "start_ts": "00:00", "title": "graph / model / estimate"},
+    {"start": 736.0,"start_ts": "12:16", "title": "effect / data / probability"},
+    {"start": 920.0,"start_ts": "15:20", "title": "counterfactual / given / when"}
+  ]
+}
+```
+
+### 翻译（Rick Astley 歌词 → 中文）
+
+```
+[00:01] ♪ 我们对爱并不陌生 ♪
+[00:18] ♪ 你知道规则，我也一样 ♪
+[00:22] ♪ 我想到的是全心全意的承诺 ♪
+```
 
 ---
 
-## 📺 示例输出
+## 🧪 测试
 
-仓库 `output/` 目录包含真实示例：
+```bash
+python -m pytest tests/ -v    # 39 个单元测试
+python tests/test_youtube_utils.py   # 无需 pytest 也可运行
+```
 
-| 视频 | 长度 | 方式 | 字符数 |
-|------|------|------|--------|
-| [Rick Astley - Never Gonna Give You Up](https://www.youtube.com/watch?v=dQw4w9WgXcQ) | 3:33 | 字幕提取 | ~2K |
-| [Judea Pearl - The Foundations of Causal Inference](https://www.youtube.com/watch?v=nWaM6XmQEmU) | 2:01 | Whisper 转写 | ~79K |
-
----
-
-## 🔧 环境变量
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `WHISPER_MODEL_DIR` | `~/.hermes/whisper/models` | Whisper 模型存储路径 |
-| `WHISPER_TEMP` | `~/.hermes/whisper/temp` | 临时音频文件路径 |
-| `WHISPER_MODEL` | `small` | Whisper 模型（tiny/base/small） |
-| `WHISPER_DEVICE` | `cuda` | torch 设备（无 GPU 设 cpu） |
+覆盖：URL 解析、安全文件名、VTT 解析、GPU 检测、缓存往返、章节检测、格式转换、翻译分块、时间范围解析。
 
 ---
 
-## 🤝 贡献指南
+## 🤝 致谢
 
-PR / Issue 都欢迎！提交前请确保：
+- 灵感与结构参考 [Air000000/bilibili-content](https://github.com/Air000000/bilibili-content)
+- [yt-dlp](https://github.com/yt-dlp/yt-dlp) — 音频/字幕下载
+- [openai-whisper](https://github.com/openai/whisper) — 语音转写
+- [faster-whisper](https://github.com/SYSTRAN/faster-whisper) — 加速转写后端
 
-1. 代码通过 `python scripts/analyze_youtube.py <test_url>` 测试
-2. 更新了相关文档
+## 📄 License
 
----
-
-## 🙏 致谢
-
-本项目的架构和设计思路参考了 [Air000000/bilibili-content](https://github.com/Air000000/bilibili-content) —— 一个优秀的 B站 视频内容提取工具。感谢原作者的启发。
-
----
-
-<div align="center">
-
-**如果这个项目对你有帮助，请点个 ⭐ 支持一下！**
-
-</div>
+[MIT](LICENSE)
