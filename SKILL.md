@@ -81,9 +81,10 @@ any authentication. Captions are fetched via YouTube's public endpoints.
 | `fetch_playlist.py` | List playlist video IDs (for `--playlist` batch mode). |
 | `transcribe_whisper.py` | Transcribe with Whisper. Backends: `openai`, `faster-whisper`. Supports `--chunk-minutes` parallel transcription. |
 | `chapters.py` | Auto chapter detection (TextTiling: window similarity → topic boundaries → keyword titles). |
+| `convert_subtitles.py` | Convert segments to SRT / VTT / LRC / TXT (players, editors, lyrics). |
 | `youtube_utils.py` | Shared utilities: ID parsing, .env loading, VTT parsing, GPU detection. |
 | `cache.py` | SQLite cache (subtitles + transcripts, 7-day TTL). |
-| `tests/test_youtube_utils.py` | 28 unit tests. Run: `python tests/test_youtube_utils.py` |
+| `tests/test_youtube_utils.py` | 33 unit tests. Run: `python tests/test_youtube_utils.py` |
 
 ## Usage Strategy
 
@@ -157,6 +158,10 @@ python SKILL_DIR/scripts/analyze_youtube.py "URL" --force-whisper --chunk-minute
 # Outputs {video_id}_{title}_chapters.json with timestamped chapter list
 python SKILL_DIR/scripts/analyze_youtube.py "URL" --chapters
 python SKILL_DIR/scripts/analyze_youtube.py "URL" --auto --chapters --chapter-max 15
+
+# Convert subtitles to standard formats (SRT for editors, VTT for web, LRC for music)
+python SKILL_DIR/scripts/analyze_youtube.py "URL" --format srt
+python SKILL_DIR/scripts/analyze_youtube.py "URL" --format vtt --timestamps
 
 # Bilingual output (zh primary + en secondary, timestamp-aligned)
 python SKILL_DIR/scripts/analyze_youtube.py "URL" --languages zh-Hans,en --bilingual --timestamps

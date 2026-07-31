@@ -418,6 +418,65 @@ def test_parse_subtitles_long_line_split():
     print(f'  ✅ test_parse_subtitles_long_line_split ({len(entries)} sentences)')
 
 
+# ── Subtitle format conversion ──────────────────────────────────────────
+
+def test_srt_conversion():
+    from convert_subtitles import convert_segments
+    segments = [
+        {"start": 1.0, "duration": 2.5, "text": "Hello world"},
+        {"start": 65.5, "duration": 1.0, "text": "Second line"},
+    ]
+    out = convert_segments(segments, 'srt')
+    assert '1\n00:00:01,000 --> 00:00:03,500\nHello world' in out, out
+    assert '2\n00:01:05,500 --> 00:01:06,500\nSecond line' in out, out
+    print('  ✅ test_srt_conversion')
+
+
+def test_vtt_conversion():
+    from convert_subtitles import convert_segments
+    segments = [{"start": 1.0, "duration": 2.5, "text": "Hello world"}]
+    out = convert_segments(segments, 'vtt')
+    assert out.startswith('WEBVTT')
+    assert '00:00:01.000 --> 00:00:03.500' in out, out
+    assert 'Hello world' in out
+    print('  ✅ test_vtt_conversion')
+
+
+def test_lrc_conversion():
+    from convert_subtitles import convert_segments
+    segments = [{"start": 65.0, "duration": 2.0, "text": "La la la"}]
+    out = convert_segments(segments, 'lrc')
+    assert out == '[01:05.00]La la la', out
+    print('  ✅ test_lrc_conversion')
+
+
+def test_txt_conversion():
+    from convert_subtitles import convert_segments
+    segments = [{"start": 65.0, "duration": 2.0, "text": "La la la"}]
+    out = convert_segments(segments, 'txt')
+    assert out == '[01:05] La la la', out
+    print('  ✅ test_txt_conversion')
+
+
+def test_vtt_to_segments_roundtrip():
+    from youtube_utils import vtt_to_segments
+    vtt = '''WEBVTT
+
+00:00:01.000 --> 00:00:03.500
+Hello there
+
+00:01:30.000 --> 00:01:32.000
+Second line
+'''
+    segs = vtt_to_segments(vtt)
+    assert len(segs) == 2
+    assert segs[0]['start'] == 1.0
+    assert segs[0]['duration'] == 2.5
+    assert segs[0]['text'] == 'Hello there'
+    assert segs[1]['start'] == 90.0
+    print('  ✅ test_vtt_to_segments_roundtrip')
+
+
 def test_detect_chapters_full_pipeline():
     from chapters import detect_chapters, parse_subtitles
     # Simulate a 10-min video with 3 distinct topics
@@ -475,6 +534,11 @@ def run_all():
         test_generate_title_top_keywords,
         test_parse_subtitles_long_line_split,
         test_detect_chapters_full_pipeline,
+        test_srt_conversion,
+        test_vtt_conversion,
+        test_lrc_conversion,
+        test_txt_conversion,
+        test_vtt_to_segments_roundtrip,
     ]
     failures = 0
     for t in tests:

@@ -118,6 +118,26 @@ def generate_chapters(transcript, video_id, title, window_sec=60.0,
     return chapters, str(ch_path)
 
 
+def convert_subtitles_to(segments, fmt, video_id, title):
+    """
+    Convert precise segments to srt/vtt/lrc/txt and save alongside output.
+
+    Returns (converted_path, content) or (None, None) if conversion fails.
+    """
+    try:
+        from convert_subtitles import convert_segments
+        content = convert_segments(segments, fmt)
+    except Exception as e:
+        eprint(f'⚠ 字幕格式转换失败: {e}')
+        return None, None
+
+    safe_title = safe_filename(title)
+    out_path = OUTPUT_DIR / f'{video_id}_{safe_title}.{fmt}'
+    with open(out_path, 'w', encoding='utf-8') as f:
+        f.write(content)
+    return str(out_path), content
+
+
 # ── Subtitle verification ──────────────────────────────────────────────
 _MUSIC_KEYWORDS = {'♪', '♫', 'music', 'verse', 'chorus', '歌词', '旋律'}
 _TECH_KEYWORDS = {
@@ -451,6 +471,16 @@ def process_one_video(video, args, whisper_model, device,
                         result["chapters_file"] = ch_path
                         eprint(f'📑 章节检测完成: {len(chapters)} 章')
 
+                # Optional: convert subtitles to srt/vtt/lrc/txt
+                if args.format:
+                    segments = sub_result.get('segments')
+                    if segments:
+                        conv_path, _ = convert_subtitles_to(
+                            segments, args.format, video_id, title)
+                        if conv_path:
+                            result["converted_file"] = conv_path
+                            eprint(f'🎬 字幕已转换: {args.format.upper()}')
+
                 eprint(f'✅ 字幕已提取 ({sub_result.get("subtitle_count", 0)} 条)')
                 return result
             # else: fall through to Whisper pipeline
@@ -601,6 +631,9 @@ def main():
                         help='Maximum chapters to detect')
     parser.add_argument('--chapter-top-words', type=int, default=4,
                         help='Keywords per auto-generated chapter title')
+    parser.add_argument('--format', default=None,
+                        choices=['srt', 'vtt', 'lrc', 'txt'],
+                        help='Convert subtitles to standard format (srt/vtt/lrc/txt)')
     args = parser.parse_args()
 
     # Load .env if present (does not override existing env vars)

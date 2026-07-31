@@ -130,27 +130,55 @@ def format_vtt(vtt_content: str, include_timestamps: bool = False) -> list:
     is prefixed with [MM:SS].
     """
     lines = []
+    for seg in vtt_to_segments(vtt_content):
+        text = seg['text']
+        if include_timestamps:
+            lines.append(f'[{int(seg["start"]//60):02d}:{int(seg["start"]%60):02d}] {text}')
+        else:
+            lines.append(text)
+    return lines
+
+
+def vtt_to_segments(vtt_content: str) -> list:
+    """
+    Parse VTT content into precise segments.
+
+    Returns list of {"start": float, "duration": float, "text": str}
+    """
+    segments = []
     cue_re = re.compile(r'(?:(\d{1,2}):)?(\d{2}):(\d{2})\.(\d{3})\s*-->')
-    current_time = None
+    current_start = None
+    current_end = None
     current_text = []
 
     for raw in vtt_content.split('\n'):
         line = raw.strip()
         if '-->' in line:
             # Flush previous cue
-            if current_time is not None and current_text:
+            if current_start is not None and current_text:
                 text = ' '.join(current_text)
-                if include_timestamps:
-                    lines.append(f'[{int(current_time//60):02d}:{int(current_time%60):02d}] {text}')
-                else:
-                    lines.append(text)
+                duration = (current_end - current_start) if current_end is not None else 2.0
+                segments.append({
+                    "start": round(current_start, 3),
+                    "duration": round(max(0.1, duration), 3),
+                    "text": text,
+                })
+            # Parse cue timestamps (start --> end)
             m = cue_re.search(line)
             if m:
                 h, mnt, sec, ms = m.groups()
-                current_time = (int(h or 0) * 3600 + int(mnt) * 60
-                                + int(sec) + int(ms) / 1000.0)
+                current_start = (int(h or 0) * 3600 + int(mnt) * 60
+                                 + int(sec) + int(ms) / 1000.0)
             else:
-                current_time = None
+                current_start = None
+            # Parse end timestamp (after -->)
+            end_m = re.search(r'-->[^\d]*(?:(\d{1,2}):)?(\d{2}):(\d{2})\.(\d{3})', line)
+            if end_m:
+                eh, em, es, ems = end_m.groups()
+                current_end = (int(eh or 0) * 3600 + int(em) * 60
+                               + int(es) + int(ems) / 1000.0)
+            else:
+                current_end = None
             current_text = []
         elif line and not line.startswith(('WEBVTT', 'Kind:', 'Language:', 'NOTE', 'STYLE')):
             cleaned = re.sub(r'<[^>]+>', '', line)
@@ -158,14 +186,16 @@ def format_vtt(vtt_content: str, include_timestamps: bool = False) -> list:
                 current_text.append(cleaned)
 
     # Flush last cue
-    if current_time is not None and current_text:
+    if current_start is not None and current_text:
         text = ' '.join(current_text)
-        if include_timestamps:
-            lines.append(f'[{int(current_time//60):02d}:{int(current_time%60):02d}] {text}')
-        else:
-            lines.append(text)
+        duration = (current_end - current_start) if current_end is not None else 2.0
+        segments.append({
+            "start": round(current_start, 3),
+            "duration": round(max(0.1, duration), 3),
+            "text": text,
+        })
 
-    return lines
+    return segments
 
 
 # ── GPU detection ───────────────────────────────────────────────────────

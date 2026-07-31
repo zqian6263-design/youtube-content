@@ -22,7 +22,7 @@ from pathlib import Path
 
 # Shared utilities (same directory as this script)
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from youtube_utils import emit_json, extract_video_id, format_vtt
+from youtube_utils import emit_json, extract_video_id, format_vtt, vtt_to_segments
 
 
 def format_segments(segments, include_timestamps: bool = False) -> str:
@@ -93,6 +93,7 @@ def try_transcript_api(video_id: str, languages: list, timestamps: bool,
                 "subtitles": text,
                 "subtitle_count": len(primary_segments),
                 "is_auto_generated": False,
+                "segments": primary_segments,  # precise start/duration/text for SRT/VTT/LRC
             }
             # Bilingual: fetch secondary language too
             if second_lang:
@@ -175,6 +176,9 @@ def try_ytdlp_subtitles(video_id: str, languages: list, timestamps: bool):
         with open(sub_files[0], encoding='utf-8', errors='replace') as f:
             vtt_content = f.read()
 
+        # Precise segments (for SRT/VTT/LRC conversion)
+        segments = vtt_to_segments(vtt_content)
+
         # Parse VTT preserving timestamps
         lines = format_vtt(vtt_content, include_timestamps=timestamps)
         count = len(lines)
@@ -190,6 +194,7 @@ def try_ytdlp_subtitles(video_id: str, languages: list, timestamps: bool):
                 "subtitle_count": count,
                 "is_auto_generated": is_auto,
                 "title": title,
+                "segments": segments,
             }
 
     return None
