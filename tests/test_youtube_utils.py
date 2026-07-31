@@ -567,6 +567,59 @@ def test_time_filter_segments():
     print('  ✅ test_time_filter_segments')
 
 
+# ── Channel watch ───────────────────────────────────────────────────────
+
+def test_watch_summarize_strips_timestamps():
+    import watch_channel as wc
+    transcript = '[00:01] Hello world\n[00:05] This is the first sentence about AI.\n[01:00] More text here.'
+    summary = wc.summarize(transcript, max_chars=200)
+    assert '[00:' not in summary  # timestamps stripped
+    assert 'Hello world' in summary
+    assert len(summary) <= 200
+    print('  ✅ test_watch_summarize_strips_timestamps')
+
+
+def test_watch_summarize_truncates():
+    import watch_channel as wc
+    long_text = 'word ' * 500
+    summary = wc.summarize(long_text, max_chars=100)
+    assert len(summary) <= 101  # 100 + ellipsis
+    assert summary.endswith('…')
+    print('  ✅ test_watch_summarize_truncates')
+
+
+def test_watch_cache_filtering():
+    """Videos already in cache should be skipped."""
+    import tempfile
+
+    import watch_channel as wc
+    from cache import Cache
+
+    with tempfile.TemporaryDirectory() as td:
+        cache = Cache(db_path=Path(td) / 'test.db')
+        # Simulate: video 'aaa111' already processed
+        cache.set_subtitles('aaa111', 'zh-Hans,zh-Hant,en', False, {
+            "status": "success", "subtitles": "already done", "language": "en",
+        })
+
+        # Monkeypatch cache in watch_channel module
+        wc.Cache = lambda: cache
+        videos = [
+            {"id": "aaa111", "title": "Old video", "duration_sec": 100},
+            {"id": "bbb222", "title": "New video", "duration_sec": 200},
+        ]
+        # Simulate the filtering logic used in main()
+        new_videos = []
+        for v in videos:
+            cached = cache.get_subtitles(v['id'], 'zh-Hans,zh-Hant,en', False)
+            if not cached:
+                new_videos.append(v)
+        assert len(new_videos) == 1
+        assert new_videos[0]['id'] == 'bbb222'
+        cache.close()
+    print('  ✅ test_watch_cache_filtering')
+
+
 def test_detect_chapters_full_pipeline():
     from chapters import detect_chapters, parse_subtitles
     # Simulate a 10-min video with 3 distinct topics
@@ -635,6 +688,9 @@ def run_all():
         test_translate_no_key_fails_gracefully,
         test_parse_time_arg,
         test_time_filter_segments,
+        test_watch_summarize_strips_timestamps,
+        test_watch_summarize_truncates,
+        test_watch_cache_filtering,
     ]
     failures = 0
     for t in tests:
