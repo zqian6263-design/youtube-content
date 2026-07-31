@@ -43,12 +43,14 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 # Shared utilities
 sys.path.insert(0, str(SCRIPT_DIR))
 from cache import Cache
+from chapters import detect_chapters, parse_subtitles
 from youtube_utils import detect_device, extract_video_id, load_env, safe_filename, safe_video_id
 
 FETCH_SUB_PY = SCRIPT_DIR / 'fetch_subtitle_youtube.py'
 FETCH_AUDIO_PY = SCRIPT_DIR / 'fetch_audio_youtube.py'
 FETCH_PLAYLIST_PY = SCRIPT_DIR / 'fetch_playlist.py'
 WHISPER_PY = SCRIPT_DIR / 'transcribe_whisper.py'
+CHAPTERS_PY = SCRIPT_DIR / 'chapters.py'
 
 # Global cache instance (lazy-init on first use)
 _cache = None
@@ -84,6 +86,36 @@ def save_output(video_id, title, transcript, source_type, metadata):
     with open(meta_path, 'w', encoding='utf-8') as f:
         json.dump(metadata, f, ensure_ascii=False, indent=2)
     return txt_path, meta_path
+
+
+def generate_chapters(transcript, video_id, title, window_sec=60.0,
+                      min_chapters=3, max_chapters=20, top_words=4):
+    """
+    Detect chapters from a transcript. Returns (chapters_list, chapters_path).
+
+    Saves a `{video_id}_{title}_chapters.json` file next to the transcript.
+    Returns empty list if the transcript has too little content for detection.
+    """
+    entries = parse_subtitles(transcript)
+    if len(entries) < 20:
+        return [], None
+
+    chapters = detect_chapters(
+        entries, window_sec=window_sec,
+        min_chapters=min_chapters, max_chapters=max_chapters,
+        top_words=top_words,
+    )
+
+    if not chapters:
+        return [], None
+
+    safe_title = safe_filename(title)
+    ch_path = OUTPUT_DIR / f'{video_id}_{safe_title}_chapters.json'
+    with open(ch_path, 'w', encoding='utf-8') as f:
+        json.dump({"video_id": video_id, "title": title, "chapters": chapters},
+                  f, ensure_ascii=False, indent=2)
+
+    return chapters, str(ch_path)
 
 
 # ── Subtitle verification ──────────────────────────────────────────────
@@ -129,7 +161,9 @@ def fetch_video_title(video):
 def run_whisper_pipeline(video_id, video_url, title, whisper_model, device,
                          whisper_model_dir, whisper_temp,
                          whisper_language, timestamps, backend='openai',
-                         chunk_minutes=0, chunk_workers=0):
+                         chunk_minutes=0, chunk_workers=0,
+                         chapters=False, chapter_window_sec=60.0,
+                         chapter_min=3, chapter_max=20, chapter_top_words=4):
     """Download audio and transcribe with Whisper."""
     safe_id = safe_video_id(video_url, fallback=video_id or 'video')
 
@@ -139,24 +173,36 @@ def run_whisper_pipeline(video_id, video_url, title, whisper_model, device,
     cached = cache.get_transcript(safe_id, whisper_model, backend)
     if cached and cached.get('status') == 'success':
         eprint(f'📦 命中转写缓存: {safe_id}')
+        cached_text = cached.get('text', '')
+        cached_title = cached.get('title', title)
         txt_path, meta_path = save_output(
-            safe_id, cached.get('title', title), cached.get('text', ''),
+            safe_id, cached_title, cached_text,
             'whisper',
             {'source': 'whisper', 'model': whisper_model, 'device': device,
              'language': cached.get('language', 'auto'),
              'duration_sec': cached.get('duration_sec', 0),
              'cached': True}
         )
-        return {
+        result = {
             "status": "success",
             "source": "whisper",
-            "title": cached.get('title', title),
+            "title": cached_title,
             "transcript_file": str(txt_path),
             "metadata_file": str(meta_path),
-            "char_count": len(cached.get('text', '')),
+            "char_count": len(cached_text),
             "message": "Whisper 转写已完成（命中缓存）。",
             "cached": True,
         }
+        if chapters:
+            ch, ch_path = generate_chapters(
+                cached_text, safe_id, cached_title,
+                window_sec=chapter_window_sec, min_chapters=chapter_min,
+                max_chapters=chapter_max, top_words=chapter_top_words)
+            if ch:
+                result["chapters"] = ch
+                result["chapters_file"] = ch_path
+                eprint(f'📑 章节检测完成: {len(ch)} 章（缓存）')
+        return result
 
     # Step 1: Download audio
     eprint('🎧 Downloading audio...')
@@ -235,7 +281,7 @@ def run_whisper_pipeline(video_id, video_url, title, whisper_model, device,
         "title": actual_title,
     })
 
-    return {
+    result = {
         "status": "success",
         "source": "whisper",
         "title": actual_title,
@@ -244,6 +290,18 @@ def run_whisper_pipeline(video_id, video_url, title, whisper_model, device,
         "char_count": len(transcript),
         "message": "Whisper 转写已完成，请总结。",
     }
+
+    if chapters:
+        ch, ch_path = generate_chapters(
+            transcript, safe_id, actual_title,
+            window_sec=chapter_window_sec, min_chapters=chapter_min,
+            max_chapters=chapter_max, top_words=chapter_top_words)
+        if ch:
+            result["chapters"] = ch
+            result["chapters_file"] = ch_path
+            eprint(f'📑 章节检测完成: {len(ch)} 章')
+
+    return result
 
 
 # ── Single-video processing ─────────────────────────────────────────────
@@ -369,8 +427,7 @@ def process_one_video(video, args, whisper_model, device,
                      'subtitle_count': sub_result.get('subtitle_count', 0)}
                 )
 
-                eprint(f'✅ 字幕已提取 ({sub_result.get("subtitle_count", 0)} 条)')
-                return {
+                result = {
                     "status": "success",
                     "source": "caption",
                     "title": title,
@@ -379,6 +436,23 @@ def process_one_video(video, args, whisper_model, device,
                     "char_count": len(transcript),
                     "message": "字幕已提取，请总结。",
                 }
+
+                # Optional: auto-detect chapters
+                if args.chapters:
+                    chapters, ch_path = generate_chapters(
+                        transcript, video_id, title,
+                        window_sec=args.chapter_window_sec,
+                        min_chapters=args.chapter_min,
+                        max_chapters=args.chapter_max,
+                        top_words=args.chapter_top_words,
+                    )
+                    if chapters:
+                        result["chapters"] = chapters
+                        result["chapters_file"] = ch_path
+                        eprint(f'📑 章节检测完成: {len(chapters)} 章')
+
+                eprint(f'✅ 字幕已提取 ({sub_result.get("subtitle_count", 0)} 条)')
+                return result
             # else: fall through to Whisper pipeline
 
         # Subtitle fetch failed — handle the failure
@@ -421,7 +495,9 @@ def process_one_video(video, args, whisper_model, device,
         video_id, video, video_id, whisper_model, device,
         whisper_model_dir, whisper_temp,
         whisper_language, args.timestamps, args.backend,
-        args.chunk_minutes, args.chunk_workers
+        args.chunk_minutes, args.chunk_workers,
+        args.chapters, args.chapter_window_sec,
+        args.chapter_min, args.chapter_max, args.chapter_top_words
     )
 
 
@@ -515,6 +591,16 @@ def main():
                              'across processes (4-6x speedup); GPU: OOM-safe')
     parser.add_argument('--chunk-workers', type=int, default=0,
                         help='Max parallel chunk workers on CPU (default: cpu_count)')
+    parser.add_argument('--chapters', action='store_true',
+                        help='Auto-detect chapters from the transcript (TextTiling)')
+    parser.add_argument('--chapter-window-sec', type=float, default=60.0,
+                        help='Chapter detection window size in seconds (default: 60)')
+    parser.add_argument('--chapter-min', type=int, default=3,
+                        help='Minimum chapters to detect')
+    parser.add_argument('--chapter-max', type=int, default=20,
+                        help='Maximum chapters to detect')
+    parser.add_argument('--chapter-top-words', type=int, default=4,
+                        help='Keywords per auto-generated chapter title')
     args = parser.parse_args()
 
     # Load .env if present (does not override existing env vars)

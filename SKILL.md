@@ -79,10 +79,11 @@ any authentication. Captions are fetched via YouTube's public endpoints.
 | `fetch_subtitle_youtube.py` | Extract captions via youtube-transcript-api + yt-dlp fallback. Supports bilingual (`--second-language`). |
 | `fetch_audio_youtube.py` | Download audio stream via yt-dlp, convert to WAV. |
 | `fetch_playlist.py` | List playlist video IDs (for `--playlist` batch mode). |
-| `transcribe_whisper.py` | Transcribe with Whisper. Backends: `openai`, `faster-whisper`. |
+| `transcribe_whisper.py` | Transcribe with Whisper. Backends: `openai`, `faster-whisper`. Supports `--chunk-minutes` parallel transcription. |
+| `chapters.py` | Auto chapter detection (TextTiling: window similarity → topic boundaries → keyword titles). |
 | `youtube_utils.py` | Shared utilities: ID parsing, .env loading, VTT parsing, GPU detection. |
 | `cache.py` | SQLite cache (subtitles + transcripts, 7-day TTL). |
-| `tests/test_youtube_utils.py` | 17 unit tests. Run: `python tests/test_youtube_utils.py` |
+| `tests/test_youtube_utils.py` | 28 unit tests. Run: `python tests/test_youtube_utils.py` |
 
 ## Usage Strategy
 
@@ -151,6 +152,11 @@ python SKILL_DIR/scripts/analyze_youtube.py "URL" --auto --backend faster-whispe
 # Long video: chunk + parallel transcription on CPU (~4-6x speedup)
 # Split into 10-min chunks, up to 4 parallel workers
 python SKILL_DIR/scripts/analyze_youtube.py "URL" --force-whisper --chunk-minutes 10 --chunk-workers 4
+
+# Auto-detect chapters from the transcript (TextTiling, no LLM needed)
+# Outputs {video_id}_{title}_chapters.json with timestamped chapter list
+python SKILL_DIR/scripts/analyze_youtube.py "URL" --chapters
+python SKILL_DIR/scripts/analyze_youtube.py "URL" --auto --chapters --chapter-max 15
 
 # Bilingual output (zh primary + en secondary, timestamp-aligned)
 python SKILL_DIR/scripts/analyze_youtube.py "URL" --languages zh-Hans,en --bilingual --timestamps

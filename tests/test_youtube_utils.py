@@ -330,6 +330,121 @@ def test_transcribe_chunked_single():
     print('  ✅ test_transcribe_chunked_single')
 
 
+# ── Chapter detection ───────────────────────────────────────────────────
+
+def test_parse_subtitles_with_timestamps():
+    from chapters import parse_subtitles
+    text = '[00:01] hello world\n[01:30] second line\nplain line without ts'
+    entries = parse_subtitles(text)
+    assert len(entries) == 3
+    assert entries[0]['start'] == 1.0
+    assert entries[0]['text'] == 'hello world'
+    assert entries[1]['start'] == 90.0
+    assert entries[2]['start'] is None
+    print('  ✅ test_parse_subtitles_with_timestamps')
+
+
+def test_tokenize_filters_stopwords():
+    from chapters import tokenize
+    toks = tokenize('The quick brown fox and the lazy dog')
+    assert 'quick' in toks
+    assert 'fox' in toks
+    assert 'the' not in toks
+    assert 'and' not in toks
+    print('  ✅ test_tokenize_filters_stopwords')
+
+
+def test_jaccard_similarity():
+    from chapters import jaccard
+    assert jaccard({'a', 'b'}, {'a', 'b'}) == 1.0
+    assert jaccard({'a', 'b'}, {'c', 'd'}) == 0.0
+    assert jaccard({'a'}, {'a', 'b'}) == 0.5
+    assert jaccard(set(), set()) == 1.0  # both empty
+    print('  ✅ test_jaccard_similarity')
+
+
+def test_build_windows_timestamped():
+    from chapters import build_windows
+    # 3 minutes of entries at 10s intervals, 60s windows → 3 windows
+    entries = [{"start": float(i * 10), "text": f"topic{i % 3} word{i}"}
+               for i in range(18)]  # 180s
+    windows = build_windows(entries, window_sec=60.0)
+    assert len(windows) == 3, f'expected 3 windows, got {len(windows)}'
+    assert all('tokens' in w for w in windows)
+    print('  ✅ test_build_windows_timestamped')
+
+
+def test_detect_boundaries_distinct_topics():
+    from chapters import build_windows, detect_boundaries
+    # Two very distinct topics: windows 0-4 talk about 'search algorithm',
+    # windows 5-9 talk about 'neural network' — boundary should be at 5
+    entries = []
+    for i in range(50):
+        if i < 25:
+            text = f'search algorithm graph node frontier explored state {i}'
+        else:
+            text = f'neural network gradient backpropagation layer weight {i}'
+        entries.append({"start": float(i * 60), "text": text})
+    windows = build_windows(entries, window_sec=120.0)
+    boundaries = detect_boundaries(windows, min_chapters=2, max_chapters=10)
+    assert boundaries, 'should detect at least one boundary'
+    # First boundary should be around the topic switch (window index ~13 in 120s windows)
+    assert boundaries[0] >= 3, f'boundary too early: {boundaries}'
+    print(f'  ✅ test_detect_boundaries_distinct_topics (boundaries={boundaries})')
+
+
+def test_generate_title_top_keywords():
+    from chapters import generate_title
+    windows = [
+        {"start": 0, "end": 1, "tokens": {'search', 'algorithm', 'graph', 'node'}},
+        {"start": 1, "end": 2, "tokens": {'search', 'algorithm', 'bfs', 'frontier'}},
+    ]
+    title = generate_title(windows, 0, 2, top_words=3)
+    assert 'search' in title and 'algorithm' in title
+    assert len(title) <= 80
+    print(f'  ✅ test_generate_title_top_keywords ({title!r})')
+
+
+def test_parse_subtitles_long_line_split():
+    """Whisper transcripts are single long paragraphs → split into sentences."""
+    from chapters import parse_subtitles
+    long_line = ('This is the first sentence about search. '
+                 'Here is the second sentence about knowledge. '
+                 'Finally the third sentence about uncertainty.') * 30  # >800 chars
+    entries = parse_subtitles(long_line)
+    assert len(entries) >= 3, f'long line should split into sentences, got {len(entries)}'
+    assert all(e['start'] is None for e in entries)
+    assert all(e['text'] for e in entries)
+    print(f'  ✅ test_parse_subtitles_long_line_split ({len(entries)} sentences)')
+
+
+def test_detect_chapters_full_pipeline():
+    from chapters import detect_chapters, parse_subtitles
+    # Simulate a 10-min video with 3 distinct topics
+    lines = []
+    topics = [
+        (0, 200, 'introduction overview motivation history'),
+        (200, 400, 'method algorithm implementation code details'),
+        (400, 600, 'results evaluation benchmark conclusion summary'),
+    ]
+    for start, end, base in topics:
+        t = start
+        while t < end:
+            lines.append(f'[{t // 60:02d}:{t % 60:02d}] {base} point {t}')
+            t += 30
+    text = '\n'.join(lines)
+    entries = parse_subtitles(text)
+    chapters = detect_chapters(entries, window_sec=120.0,
+                               min_chapters=3, max_chapters=6)
+    assert len(chapters) >= 3, f'expected >=3 chapters, got {len(chapters)}'
+    assert chapters[0]['start_ts'] == '00:00'
+    assert all('title' in c and c['title'] for c in chapters)
+    # Chapter timestamps should be roughly ordered
+    starts = [c['start'] for c in chapters]
+    assert starts == sorted(starts)
+    print(f'  ✅ test_detect_chapters_full_pipeline ({len(chapters)} chapters)')
+
+
 def run_all():
     tests = [
         test_extract_video_id_formats,
@@ -352,6 +467,14 @@ def run_all():
         test_get_audio_duration_wav,
         test_split_audio_chunks,
         test_transcribe_chunked_single,
+        test_parse_subtitles_with_timestamps,
+        test_tokenize_filters_stopwords,
+        test_jaccard_similarity,
+        test_build_windows_timestamped,
+        test_detect_boundaries_distinct_topics,
+        test_generate_title_top_keywords,
+        test_parse_subtitles_long_line_split,
+        test_detect_chapters_full_pipeline,
     ]
     failures = 0
     for t in tests:
