@@ -25,6 +25,7 @@ Thumbs.db
 
 # Cache database
 cache.db
+search_index.db
 
 # Temp audio files
 *.wav

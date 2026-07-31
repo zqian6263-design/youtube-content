@@ -195,6 +195,151 @@ def _search_cjk(conn, query: str, limit: int, context: int):
     return rows
 
 
+# ── Vector (semantic) search ────────────────────────────────────────────
+
+_embed_model = None
+VEC_MODEL_NAME = 'BAAI/bge-small-zh-v1.5'
+
+
+def _get_embedder():
+    """Lazy-load the embedding model (cached across calls)."""
+    global _embed_model
+    if _embed_model is None:
+        try:
+            from fastembed import TextEmbedding
+            _embed_model = TextEmbedding(model_name=VEC_MODEL_NAME)
+        except ImportError:
+            raise RuntimeError('需要 fastembed：pip install fastembed')
+    return _embed_model
+
+
+def _embed_batch(texts: list) -> list:
+    """Embed a batch of texts → list of float32 numpy arrays."""
+    model = _get_embedder()
+    return list(model.embed(texts, batch_size=64))
+
+
+def build_vector_index(db_path: Path, sources=None, verbose=True):
+    """
+    Build vector embeddings for all segments (reuses the FTS text rows).
+
+    Stores into table segments_vec (id, path, start, text, embedding BLOB).
+    Returns {"status", "segments"}.
+    """
+    conn = _connect(db_path)
+    try:
+        rows = conn.execute(
+            'SELECT rowid, path, start, text FROM subtitles_fts').fetchall()
+    except sqlite3.OperationalError as e:
+        conn.close()
+        return {"status": "failed", "message": f"索引不存在，先运行 --index: {e}"}
+
+    if not rows:
+        conn.close()
+        return {"status": "failed", "message": "FTS 索引为空"}
+
+    # Drop old vector table and rebuild
+    conn.execute('DROP TABLE IF EXISTS segments_vec')
+    conn.execute('''
+        CREATE TABLE segments_vec (
+            id INTEGER PRIMARY KEY,
+            path TEXT,
+            start REAL,
+            text TEXT,
+            embedding BLOB
+        )
+    ''')
+
+    texts = [r[3] for r in rows]
+    if verbose:
+        print(f'🧠 生成 {len(texts)} 段向量嵌入（{VEC_MODEL_NAME}）...', file=sys.stderr)
+
+    import numpy as np
+    try:
+        vecs = _embed_batch(texts)
+    except RuntimeError as e:
+        conn.close()
+        return {"status": "failed", "message": str(e)}
+
+    batch = []
+    for (rowid, path, start, text), vec in zip(rows, vecs):
+        blob = np.asarray(vec, dtype=np.float32).tobytes()
+        batch.append((rowid, path, start if start is not None else -1, text, blob))
+        if len(batch) >= 500:
+            conn.executemany(
+                'INSERT INTO segments_vec (id, path, start, text, embedding) '
+                'VALUES (?,?,?,?,?)', batch)
+            batch = []
+    if batch:
+        conn.executemany(
+            'INSERT INTO segments_vec (id, path, start, text, embedding) '
+            'VALUES (?,?,?,?,?)', batch)
+    conn.commit()
+    conn.close()
+
+    if verbose:
+        print(f'✅ 向量索引完成: {len(vecs)} 段', file=sys.stderr)
+    return {"status": "success", "segments": len(vecs)}
+
+
+def vector_search(query: str, limit: int = 10, context: int = 0,
+                  file_filter: str | None = None, db_path=None, verbose=True):
+    """Semantic search: embed query → cosine similarity over segments_vec."""
+    db_path = Path(db_path) if db_path else index_path()
+    if not db_path.exists():
+        return {"status": "failed", "message": f"索引不存在: {db_path}，请先运行 --index"}
+
+    conn = _connect(db_path)
+    try:
+        rows = conn.execute(
+            'SELECT id, path, start, text, embedding FROM segments_vec').fetchall()
+    except sqlite3.OperationalError:
+        conn.close()
+        return {"status": "failed",
+                "message": "向量索引不存在，请运行：python search.py --index --vector"}
+
+    if not rows:
+        conn.close()
+        return {"status": "failed", "message": "向量索引为空"}
+
+    import numpy as np
+    qvec = np.asarray(_embed_batch([query])[0], dtype=np.float32)
+    qnorm = np.linalg.norm(qvec)
+    if qnorm == 0:
+        conn.close()
+        return {"status": "failed", "message": "查询向量为空"}
+
+    scored = []
+    for rid, path, start, text, blob in rows:
+        vec = np.frombuffer(blob, dtype=np.float32)
+        n = np.linalg.norm(vec)
+        if n == 0:
+            continue
+        sim = float(np.dot(qvec, vec) / (qnorm * n))
+        scored.append((sim, rid, path, start, text))
+    conn.close()
+
+    scored.sort(key=lambda x: -x[0])
+    results = []
+    for sim, rid, path, start, text in scored[:limit]:
+        results.append({
+            "path": path,
+            "start": start if start >= 0 else None,
+            "start_ts": f'{int(start) // 60:02d}:{int(start) % 60:02d}' if start >= 0 else '',
+            "text": text,
+            "score": round(sim, 4),
+        })
+
+    if file_filter:
+        results = [r for r in results if file_filter.lower() in Path(r['path']).name.lower()]
+
+    if context > 0 and results:
+        results = _add_context(results, context, db_path)
+
+    return {"status": "success", "query": query, "count": len(results),
+            "matches": results, "mode": "vector"}
+
+
 def search(query: str, limit: int = 10, context: int = 0,
            file_filter: str | None = None, db_path=None, verbose=True):
     """Search the index. Returns list of match dicts."""
@@ -361,6 +506,8 @@ def main():
     parser.add_argument('--query', default=None, help='Search query')
     parser.add_argument('--ask', default=None,
                         help='Ask a question (RAG: search + LLM answer)')
+    parser.add_argument('--vector', action='store_true',
+                        help='Use vector (semantic) search instead of FTS')
     parser.add_argument('--limit', type=int, default=10)
     parser.add_argument('--context', type=int, default=0,
                         help='Show N surrounding lines')
@@ -370,6 +517,12 @@ def main():
 
     if args.index:
         result = build_index(paths=args.path, verbose=True)
+        if args.vector:
+            vec_result = build_vector_index(index_path(), sources=args.path, verbose=True)
+            if vec_result.get('status') != 'success':
+                print(json.dumps(vec_result, ensure_ascii=False))
+                sys.exit(1)
+            result['vector_segments'] = vec_result.get('segments', 0)
         print(json.dumps(result, ensure_ascii=False))
         return
 
@@ -410,7 +563,11 @@ def main():
             search_parts = cjk_clean[:3]
         search_query = ' '.join(search_parts) if search_parts else args.ask
 
-        result = search(search_query, limit=6, context=1, file_filter=args.file)
+        if args.vector:
+            result = vector_search(search_query, limit=6, context=1,
+                                   file_filter=args.file)
+        else:
+            result = search(search_query, limit=6, context=1, file_filter=args.file)
         if result.get('status') != 'success' or not result.get('matches'):
             print(json.dumps({
                 "status": "failed",
@@ -431,8 +588,12 @@ def main():
                     print(f"  [{ref['start_ts']}] {ref['file']}")
         return
 
-    result = search(args.query, limit=args.limit, context=args.context,
-                    file_filter=args.file)
+    if args.vector:
+        result = vector_search(args.query, limit=args.limit, context=args.context,
+                               file_filter=args.file)
+    else:
+        result = search(args.query, limit=args.limit, context=args.context,
+                        file_filter=args.file)
     if args.json:
         print(json.dumps(result, ensure_ascii=False, indent=2))
     else:

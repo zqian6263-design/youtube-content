@@ -85,7 +85,7 @@ any authentication. Captions are fetched via YouTube's public endpoints.
 | `translate.py` | LLM subtitle translation (OpenAI-compatible API: DeepSeek/OpenAI). |
 | `watch_channel.py` | Watch channel/playlist for new videos → Markdown report (cron-friendly). |
 | `webui.py` | Flask web UI: paste URL → extract/transcribe → view + download (needs flask). |
-| `search.py` | Full-text search (FTS5 + CJK bigram) and `--ask` RAG Q&A over subtitles/notes. |
+| `search.py` | Full-text search (FTS5 + CJK bigram), vector semantic search (`--vector`), and `--ask` RAG Q&A. |
 | `feishu_bot.py` | Feishu bot: send a YouTube link → get caption/transcript reply (needs app credentials). |
 | `pipeline.py` | One-command pipeline: watch → extract → enhance → archive → reindex → report. |
 | `fetch_audio_youtube.py` | Download audio stream via yt-dlp, convert to WAV. Supports `--start-sec/--end-sec`, cookies, auto-retry, bot/age detection. |
@@ -211,6 +211,11 @@ python SKILL_DIR/scripts/feishu_bot.py --port 8081   # webhook at /webhook
 python SKILL_DIR/scripts/search.py --index                     # build index
 python SKILL_DIR/scripts/search.py --query "贝叶斯" --context 2 # search with context
 python SKILL_DIR/scripts/search.py --query "heuristic" --file "CS50" --limit 5
+
+# Vector semantic search (needs: pip install fastembed; ~100MB model auto-download)
+python SKILL_DIR/scripts/search.py --index --vector           # build FTS + vector index
+python SKILL_DIR/scripts/search.py --query "如何更新你的信念" --vector   # semantic search
+python SKILL_DIR/scripts/search.py --ask "A*和贪心的区别？" --vector     # semantic RAG
 
 # RAG Q&A over your subtitle/note library (needs DEEPSEEK_API_KEY)
 python SKILL_DIR/scripts/search.py --ask "A*搜索和贪心搜索的区别？"

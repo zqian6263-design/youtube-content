@@ -950,6 +950,62 @@ def test_pipeline_process_video_mock():
     print('  ✅ test_pipeline_process_video_mock')
 
 
+def test_vector_index_and_search_mock():
+    """Vector index build + semantic search (mocked embeddings)."""
+    import tempfile
+
+    import numpy as np
+    import search
+
+    with tempfile.TemporaryDirectory() as td:
+        src = Path(td) / 'src'
+        src.mkdir()
+        (src / 'a.txt').write_text(
+            '[00:01] the cat sat on the mat\n[00:10] dogs like to run\n',
+            encoding='utf-8')
+        db = Path(td) / 'idx.db'
+
+        # Build FTS index first
+        search.build_index(paths=[src], db_path=db, verbose=False)
+
+        # Mock embeddings: deterministic vectors from text hash
+        orig_embed = search._embed_batch
+        def fake_embed(texts):
+            import hashlib
+            vecs = []
+            for t in texts:
+                h = hashlib.md5(t.encode()).digest()
+                v = np.frombuffer(h, dtype=np.uint8).astype(np.float32) / 255.0
+                v = np.tile(v, 16)[:512]  # 512-dim
+                vecs.append(v)
+            return vecs
+        search._embed_batch = fake_embed
+        try:
+            result = search.build_vector_index(db, verbose=False)
+            assert result['status'] == 'success'
+            assert result['segments'] == 2
+
+            # Query that shares text with a segment
+            r = search.vector_search('cat mat', db_path=db)
+            assert r['status'] == 'success'
+            assert r['count'] >= 1
+        finally:
+            search._embed_batch = orig_embed
+    print('  ✅ test_vector_index_and_search_mock')
+
+
+def test_vector_search_no_index_graceful():
+    """Vector search without vector index fails gracefully."""
+    import tempfile
+
+    import search
+    with tempfile.TemporaryDirectory() as td:
+        db = Path(td) / 'idx.db'
+        r = search.vector_search('test', db_path=db)
+        assert r['status'] == 'failed'
+    print('  ✅ test_vector_search_no_index_graceful')
+
+
 def test_detect_chapters_full_pipeline():
     from chapters import detect_chapters, parse_subtitles
     # Simulate a 10-min video with 3 distinct topics
@@ -1037,6 +1093,8 @@ def run_all():
         test_watch_process_channel_mock,
         test_pipeline_extract_json,
         test_pipeline_process_video_mock,
+        test_vector_index_and_search_mock,
+        test_vector_search_no_index_graceful,
     ]
     failures = 0
     for t in tests:
