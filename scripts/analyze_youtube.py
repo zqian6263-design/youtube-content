@@ -706,7 +706,13 @@ def process_one_video(video, args, whisper_model, device,
             so, se, sc = run_script(FETCH_SUB_PY, *sub_args, timeout=90)
 
             try:
-                sub_result = json.loads(so)
+                # Robust parse: strip any yt-dlp progress lines that may
+                # precede the JSON payload (stdout may not be pure JSON).
+                json_start = so.find('{')
+                if json_start >= 0:
+                    sub_result = json.loads(so[json_start:])
+                else:
+                    raise json.JSONDecodeError('no JSON in output', so, 0)
             except json.JSONDecodeError:
                 sub_result = {"status": "failed", "phase": "parse",
                               "message": f"Subtitle script output parse error: {so[:200]}"}

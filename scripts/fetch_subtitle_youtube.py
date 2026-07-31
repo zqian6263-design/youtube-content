@@ -171,6 +171,7 @@ def try_ytdlp_subtitles(video_id: str, languages: list, timestamps: bool):
         ydl_opts = {
             'quiet': True,
             'no_warnings': True,
+            'noprogress': True,  # keep stdout clean: progress would break JSON parsing
             'writesubtitles': True,
             'writeautomaticsub': True,
             'subtitleslangs': [selected_lang],
