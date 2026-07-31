@@ -722,6 +722,83 @@ def test_llm_titles_fallback_on_count_mismatch():
     print('  ✅ test_llm_titles_fallback_on_count_mismatch')
 
 
+def test_search_bigram_tokenize():
+    from search import _bigram_tokenize
+    assert _bigram_tokenize('深度学习') == '深度 度学 学习'
+    assert _bigram_tokenize('反事实') == '反事 事实'
+    assert _bigram_tokenize('neural network') == 'neural network'
+    assert _bigram_tokenize('neural网络') == 'neural 网络'
+    print('  ✅ test_search_bigram_tokenize')
+
+
+def test_search_extract_segments_timestamps():
+    import tempfile
+
+    from search import _extract_segments
+    with tempfile.TemporaryDirectory() as td:
+        f = Path(td) / 'subs.txt'
+        f.write_text('[00:05] hello world\n[01:30] second line\n', encoding='utf-8')
+        segs = _extract_segments(f, 'f1')
+        assert len(segs) == 2
+        assert segs[0][2] == 5
+        assert segs[0][3] == 'hello world'
+        assert segs[1][2] == 90
+    print('  ✅ test_search_extract_segments_timestamps')
+
+
+def test_search_long_line_splitting():
+    import tempfile
+
+    from search import _extract_segments
+    with tempfile.TemporaryDirectory() as td:
+        f = Path(td) / 'whisper.txt'
+        long = ('This is sentence one about causal inference. '
+                'This is sentence two about counterfactuals. ') * 30
+        f.write_text(long, encoding='utf-8')
+        segs = _extract_segments(f, 'f1')
+        assert len(segs) > 3  # split into sentences
+        assert all(len(s[3]) <= 800 for s in segs)
+    print(f'  ✅ test_search_long_line_splitting ({len(segs)} 段)')
+
+
+def test_search_index_and_query():
+    """Build a small index and query it (ASCII + CJK paths)."""
+    import tempfile
+
+    import search
+    with tempfile.TemporaryDirectory() as td:
+        src = Path(td) / 'src'
+        src.mkdir()
+        (src / 'a.txt').write_text(
+            '[00:01] neural network training\n[00:10] gradient descent\n',
+            encoding='utf-8')
+        (src / 'b.md').write_text(
+            '## 贝叶斯定理\n贝叶斯定理用于更新信念\n',
+            encoding='utf-8')
+
+        db = Path(td) / 'idx.db'
+        result = search.build_index(paths=[src], db_path=db, verbose=False)
+        assert result['status'] == 'success'
+        assert result['files'] == 2
+
+        # ASCII query
+        r = search.search('neural', db_path=db)
+        assert r['status'] == 'success'
+        assert r['count'] >= 1
+        assert 'neural' in r['matches'][0]['text']
+
+        # CJK query
+        r2 = search.search('贝叶斯', db_path=db)
+        assert r2['status'] == 'success'
+        assert r2['count'] >= 1, f'CJK search failed: {r2}'
+        assert '贝叶斯' in r2['matches'][0]['text']
+
+        # No match
+        r3 = search.search('zzz_nonexistent', db_path=db)
+        assert r3['count'] == 0
+    print('  ✅ test_search_index_and_query')
+
+
 def test_detect_chapters_full_pipeline():
     from chapters import detect_chapters, parse_subtitles
     # Simulate a 10-min video with 3 distinct topics
@@ -798,6 +875,10 @@ def run_all():
         test_translation_cache_roundtrip,
         test_llm_titles_parse_without_timestamps,
         test_llm_titles_fallback_on_count_mismatch,
+        test_search_bigram_tokenize,
+        test_search_extract_segments_timestamps,
+        test_search_long_line_splitting,
+        test_search_index_and_query,
     ]
     failures = 0
     for t in tests:
