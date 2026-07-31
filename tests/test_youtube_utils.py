@@ -477,6 +477,67 @@ Second line
     print('  ✅ test_vtt_to_segments_roundtrip')
 
 
+# ── Translation helpers ─────────────────────────────────────────────────
+
+def test_split_chunks_small_text():
+    from translate import split_chunks
+    text = 'hello world ' * 100  # ~1200 chars
+    chunks = split_chunks(text, max_chars=10000)
+    assert len(chunks) == 1
+    assert chunks[0] == text
+    print('  ✅ test_split_chunks_small_text')
+
+
+def test_split_chunks_large_text():
+    from translate import split_chunks
+    text = ('This is a sentence. ' * 2000)  # ~40K chars
+    chunks = split_chunks(text, max_chars=10000, overlap=500)
+    assert len(chunks) >= 3, f'expected multiple chunks, got {len(chunks)}'
+    # Chunks should tile the whole text
+    joined = ''.join(chunks)
+    assert len(joined) >= len(text)
+    # Each chunk within limit
+    assert all(len(c) <= 10000 + 500 for c in chunks)
+    print(f'  ✅ test_split_chunks_large_text ({len(chunks)} chunks)')
+
+
+def test_resolve_api_key_priority():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('tr', SCRIPTS_DIR / 'translate.py')
+    tr = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(tr)
+    import types
+    # Explicit key wins
+    args = types.SimpleNamespace(api_key='explicit')
+    assert tr.resolve_api_key(args) == 'explicit'
+    # Env fallback
+    os.environ['DEEPSEEK_API_KEY'] = 'env_deepseek'
+    args = types.SimpleNamespace(api_key=None)
+    assert tr.resolve_api_key(args) == 'env_deepseek'
+    os.environ.pop('DEEPSEEK_API_KEY', None)
+    # No key → None
+    os.environ.pop('OPENAI_API_KEY', None)
+    args = types.SimpleNamespace(api_key=None)
+    assert tr.resolve_api_key(args) is None
+    print('  ✅ test_resolve_api_key_priority')
+
+
+def test_translate_no_key_fails_gracefully():
+    import types
+
+    from translate import translate_text
+    os.environ.pop('DEEPSEEK_API_KEY', None)
+    os.environ.pop('OPENAI_API_KEY', None)
+    args = types.SimpleNamespace(
+        api_key=None, base_url='https://api.deepseek.com/v1', model='deepseek-chat',
+        target='zh', max_chunk_chars=30000, timeout=300,
+    )
+    result = translate_text('hello world', args)
+    assert result['status'] == 'failed'
+    assert 'API key' in result['message']
+    print('  ✅ test_translate_no_key_fails_gracefully')
+
+
 def test_detect_chapters_full_pipeline():
     from chapters import detect_chapters, parse_subtitles
     # Simulate a 10-min video with 3 distinct topics
@@ -539,6 +600,10 @@ def run_all():
         test_lrc_conversion,
         test_txt_conversion,
         test_vtt_to_segments_roundtrip,
+        test_split_chunks_small_text,
+        test_split_chunks_large_text,
+        test_resolve_api_key_priority,
+        test_translate_no_key_fails_gracefully,
     ]
     failures = 0
     for t in tests:

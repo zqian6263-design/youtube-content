@@ -138,6 +138,47 @@ def convert_subtitles_to(segments, fmt, video_id, title):
     return str(out_path), content
 
 
+def translate_transcript(transcript, video_id, title, target='zh', args=None):
+    """
+    Translate a transcript via the LLM API. Returns (translated_path, text).
+
+    Saves `{video_id}_{title}_{target}.txt`. Returns (None, None) on failure
+    (e.g. missing API key).
+    """
+    try:
+        import argparse as _argparse
+
+        from translate import translate_text
+        t_args = _argparse.Namespace(
+            api_key=getattr(args, 'translate_api_key', None),
+            base_url=getattr(args, 'translate_base_url', None)
+            or os.environ.get('TRANSLATE_BASE_URL', 'https://api.deepseek.com/v1'),
+            model=getattr(args, 'translate_model', None)
+            or os.environ.get('TRANSLATE_MODEL', 'deepseek-chat'),
+            target=target,
+            max_chunk_chars=30000,
+            timeout=300,
+        )
+    except ImportError:
+        return None, None
+
+    eprint(f'🌐 翻译中（目标语言: {target}）...')
+    result = translate_text(transcript, t_args)
+    if result.get('status') != 'success':
+        eprint(f'⚠ 翻译失败: {result.get("message", "未知错误")}')
+        return None, None
+
+    translated = result.get('translated_text', '')
+    safe_title = safe_filename(title)
+    out_path = OUTPUT_DIR / f'{video_id}_{safe_title}_{target}.txt'
+    with open(out_path, 'w', encoding='utf-8') as f:
+        f.write(f'标题: {title}\n翻译: {target}\n')
+        f.write('=' * 40 + '\n')
+        f.write(translated)
+    eprint(f'🌐 翻译完成 ({result.get("chunks", 1)} 块)')
+    return str(out_path), translated
+
+
 # ── Subtitle verification ──────────────────────────────────────────────
 _MUSIC_KEYWORDS = {'♪', '♫', 'music', 'verse', 'chorus', '歌词', '旋律'}
 _TECH_KEYWORDS = {
@@ -481,6 +522,15 @@ def process_one_video(video, args, whisper_model, device,
                             result["converted_file"] = conv_path
                             eprint(f'🎬 字幕已转换: {args.format.upper()}')
 
+                # Optional: LLM translation
+                if args.translate:
+                    tr_path, tr_text = translate_transcript(
+                        transcript, video_id, title,
+                        target=args.translate_target, args=args)
+                    if tr_path:
+                        result["translated_file"] = tr_path
+                        result["translated_char_count"] = len(tr_text)
+
                 eprint(f'✅ 字幕已提取 ({sub_result.get("subtitle_count", 0)} 条)')
                 return result
             # else: fall through to Whisper pipeline
@@ -634,6 +684,16 @@ def main():
     parser.add_argument('--format', default=None,
                         choices=['srt', 'vtt', 'lrc', 'txt'],
                         help='Convert subtitles to standard format (srt/vtt/lrc/txt)')
+    parser.add_argument('--translate', action='store_true',
+                        help='Translate subtitles via LLM API (needs DEEPSEEK_API_KEY/OPENAI_API_KEY)')
+    parser.add_argument('--translate-target', default='zh',
+                        help='Translation target language (zh/en/ja/ko/fr/de/es, default: zh)')
+    parser.add_argument('--translate-api-key', default=None,
+                        help='LLM API key (default: DEEPSEEK_API_KEY or OPENAI_API_KEY env)')
+    parser.add_argument('--translate-base-url', default=None,
+                        help='OpenAI-compatible API base URL (default: DeepSeek)')
+    parser.add_argument('--translate-model', default=None,
+                        help='Translation model (default: deepseek-chat)')
     args = parser.parse_args()
 
     # Load .env if present (does not override existing env vars)
