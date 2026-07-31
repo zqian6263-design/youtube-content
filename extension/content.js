@@ -55,7 +55,7 @@ async function onClick() {
   showPanel('⏳ 正在提取内容，请稍候...<br><small>（需要本地运行: python scripts/webui.py）</small>', true);
 
   try {
-    const resp = await fetch(`${API}?url=${encodeURIComponent(vid)}&max=3000`, { signal: AbortSignal.timeout(60000) });
+    const resp = await fetch(`${API}?url=${encodeURIComponent(vid)}&max=6000`, { signal: AbortSignal.timeout(120000) });
     const data = await resp.json();
     if (data.status === 'success') {
       let html = `<b>${escapeHtml(data.title || '')}</b><br>`;
@@ -66,8 +66,19 @@ async function onClick() {
         });
         html += '</ul>';
       }
-      html += '<hr><div style="white-space:pre-wrap;word-break:break-word">' +
-        escapeHtml(data.text || '') + '</div>';
+      // LLM summary first (Simplified Chinese), then collapsible raw text
+      if (data.summary) {
+        html += '<hr><b>📝 总结</b><div style="white-space:pre-wrap;word-break:break-word;margin-top:6px">' +
+          escapeHtml(data.summary) + '</div>';
+        if (data.text) {
+          html += '<details style="margin-top:8px"><summary style="cursor:pointer;color:#57606a">📄 查看字幕原文</summary>' +
+            '<div style="white-space:pre-wrap;word-break:break-word;margin-top:6px;color:#57606a">' +
+            escapeHtml(data.text) + '</div></details>';
+        }
+      } else {
+        html += '<hr><div style="white-space:pre-wrap;word-break:break-word">' +
+          escapeHtml(data.text || '') + '</div>';
+      }
       showPanel(html, true);
     } else if (data.status === 'needs_confirmation') {
       showPanel('📭 该视频无字幕。<br>用 Whisper 转写需在本地运行:<br><code>analyze_youtube.py "URL" --whisper</code>', false);

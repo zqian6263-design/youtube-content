@@ -225,11 +225,12 @@ def add_cors_headers(resp):
 def api_quick():
     """Quick API for the browser extension.
 
-    GET /api/quick?url=<video>&max=<chars>
-    Returns: {status, title, text, chapters}
+    GET /api/quick?url=<video>&max=<chars>&summarize=<0|1>
+    Returns: {status, title, summary, text, chapters}
     """
     url = request.args.get('url', '').strip()
     max_chars = int(request.args.get('max', '3000'))
+    do_summarize = request.args.get('summarize', '1') != '0'
     if not url:
         return jsonify({"status": "failed", "message": "缺少 url 参数"}), 400
 
@@ -258,9 +259,25 @@ def api_quick():
     except OSError:
         pass
 
+    # LLM summary (Simplified Chinese, cached) when requested
+    summary = None
+    if do_summarize and text:
+        try:
+            sys.path.insert(0, str(SCRIPT_DIR))
+            from analyze_youtube import summarize_transcript
+            import argparse as _ap
+            s_args = _ap.Namespace(
+                translate_api_key=None, translate_base_url=None, translate_model=None)
+            summary, _used_cache = summarize_transcript(
+                text, data.get('video_id') or url, data.get('title', ''),
+                args=s_args)
+        except Exception as e:
+            print(f'⚠ summarize failed: {e}', file=sys.stderr)
+
     return jsonify({
         "status": "success",
         "title": data.get('title', ''),
+        "summary": summary,
         "text": text,
         "chapters": data.get('chapters', []),
         "transcript_file": data.get('transcript_file'),
@@ -328,6 +345,14 @@ def main():
     parser.add_argument('--host', default='127.0.0.1')
     parser.add_argument('--port', type=int, default=8080)
     args = parser.parse_args()
+
+    # Load .env so DEEPSEEK_API_KEY works for /api/quick summarize
+    try:
+        from youtube_utils import load_env
+        load_env()
+    except ImportError:
+        pass
+
     print(f'🌐 Web UI 启动: http://{args.host}:{args.port}')
     app.run(host=args.host, port=args.port, debug=False)
 

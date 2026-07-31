@@ -256,6 +256,64 @@ def archive_note(video_id, title, transcript, result, archive_dir, extra=None):
     return str(note_path)
 
 
+def summarize_transcript(transcript, video_id, title, args=None, max_chars=6000):
+    """
+    Generate a concise Simplified-Chinese summary of a transcript via LLM.
+
+    Returns (summary_text, used_cache). Falls back to a truncated preview
+    of the transcript if no API key or the LLM call fails.
+    """
+    from translate import call_llm, resolve_api_key
+    import types as _types
+
+    key_args = _types.SimpleNamespace(
+        api_key=getattr(args, 'translate_api_key', None))
+    api_key = resolve_api_key(key_args)
+    if not api_key:
+        eprint('⚠ 总结需要 API key（DEEPSEEK_API_KEY），返回原文预览')
+        return transcript[:max_chars], False
+
+    base_url = (getattr(args, 'translate_base_url', None)
+                or os.environ.get('TRANSLATE_BASE_URL', 'https://api.deepseek.com/v1'))
+    model = (getattr(args, 'translate_model', None)
+             or os.environ.get('TRANSLATE_MODEL', 'deepseek-chat'))
+
+    # Cache key: summarize:{video_id}:{model}
+    cache = get_cache()
+    cached = cache._get(f'summarize:{video_id}:{model}')
+    if cached:
+        return cached, True
+
+    # Truncate transcript for context (keep head + tail if very long)
+    if len(transcript) > max_chars * 3:
+        head = transcript[:max_chars]
+        tail = transcript[-max_chars:]
+        content = head + '\n\n[中间内容省略]\n\n' + tail
+    else:
+        content = transcript
+
+    system = (
+        '你是一名视频内容总结助手。根据提供的字幕内容，输出一份简体中文总结。'
+        '要求：\n'
+        '1. 必须使用简体中文（繁体字幕也要转成简体）\n'
+        '2. 结构：先用一句话概括视频主题，然后列 5-8 个要点（每点一行，'
+        '用 - 开头）\n'
+        '3. 要点要提炼核心观点，不要复述原文句子\n'
+        '4. 术语保留中英对照（如：反向传播（backpropagation））\n'
+        '5. 总长度控制在 400 字以内\n'
+    )
+    user = f'视频标题: {title}\n\n字幕内容:\n{content[:max_chars * 3]}'
+
+    try:
+        summary = call_llm(api_key, base_url, model, system, user, timeout=180)
+    except Exception as e:
+        eprint(f'⚠ 总结失败: {str(e)[:150]}，返回原文预览')
+        return transcript[:max_chars], False
+
+    cache._set(f'summarize:{video_id}:{model}', summary)
+    return summary, True
+
+
 def convert_subtitles_to(segments, fmt, video_id, title):
     """
     Convert precise segments to srt/vtt/lrc/txt and save alongside output.

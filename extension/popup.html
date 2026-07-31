@@ -49,6 +49,9 @@ document.getElementById('run').addEventListener('click', async () => {
         out += '📑 章节:\n' + data.chapters.slice(0, 10).map(c =>
           `  ${c.start_ts} — ${c.title}`).join('\n') + '\n\n';
       }
+      if (data.summary) {
+        out += '📝 总结:\n' + data.summary + '\n\n📄 原文（展开）:\n';
+      }
       out += data.text || '';
       statusEl.textContent = out;
     } else {
