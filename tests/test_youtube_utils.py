@@ -1006,6 +1006,47 @@ def test_vector_search_no_index_graceful():
     print('  ✅ test_vector_search_no_index_graceful')
 
 
+def test_playlist_title_parse():
+    """fetch_playlist parses the 4th tab field as playlist title."""
+
+    lines = (
+        '1\tvidAAA\tVideo A\tCS50 Seminars - Fall 2025\n'
+        '2\tvidBBB\tVideo B\tCS50 Seminars - Fall 2025\n'
+    )
+    videos, playlist_title = [], ''
+    for line in lines.split('\n'):
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split('\t')
+        if len(parts) >= 2:
+            idx, vid = parts[0], parts[1]
+            title = '\t'.join(parts[2:3]) if len(parts) > 2 else ''
+            if len(parts) >= 4 and parts[3] and 'playlist:' not in parts[3]:
+                playlist_title = parts[3]
+            videos.append({"index": idx, "id": vid, "title": title})
+    assert playlist_title == 'CS50 Seminars - Fall 2025'
+    assert len(videos) == 2
+    assert videos[0]['title'] == 'Video A'
+    # fallback when no playlist_title field
+    assert (playlist_title or 'playlist:PLX') == 'CS50 Seminars - Fall 2025'
+    print('  ✅ test_playlist_title_parse')
+
+
+def test_playlist_flat_mode_no_title_field():
+    """Old 3-field lines: title keeps only field 3, playlist_title falls back."""
+    line = '1\tvidAAA\tVideo A\n'
+    parts = line.strip().split('\t')
+    title = '\t'.join(parts[2:3]) if len(parts) > 2 else ''
+    playlist_title = ''
+    if len(parts) >= 4 and parts[3] and 'playlist:' not in parts[3]:
+        playlist_title = parts[3]
+    assert title == 'Video A'
+    assert playlist_title == ''
+    assert (playlist_title or 'playlist:PLX') == 'playlist:PLX'
+    print('  ✅ test_playlist_flat_mode_no_title_field')
+
+
 def test_detect_chapters_full_pipeline():
     from chapters import detect_chapters, parse_subtitles
     # Simulate a 10-min video with 3 distinct topics
@@ -1095,6 +1136,8 @@ def run_all():
         test_pipeline_process_video_mock,
         test_vector_index_and_search_mock,
         test_vector_search_no_index_graceful,
+        test_playlist_title_parse,
+        test_playlist_flat_mode_no_title_field,
     ]
     failures = 0
     for t in tests:

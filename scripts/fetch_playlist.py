@@ -56,7 +56,7 @@ def main():
     # Build yt-dlp command
     cmd = [
         'yt-dlp', '--quiet', '--no-warnings', '--flat-playlist',
-        '--print', '%(playlist_index)s\t%(id)s\t%(title)s',
+        '--print', '%(playlist_index)s\t%(id)s\t%(title)s\t%(playlist_title)s',
     ]
     if args.cookies:
         cmd += ['--cookies', args.cookies]
@@ -80,8 +80,9 @@ def main():
             "playlist_id": playlist_id
         }, exit_code=1)
 
-    # Parse output lines: index \t id \t title
+    # Parse output lines: index \t id \t title \t playlist_title
     videos = []
+    playlist_title = ''
     for line in result.stdout.split('\n'):
         line = line.strip()
         if not line:
@@ -90,7 +91,9 @@ def main():
         if len(parts) >= 2:
             idx = parts[0]
             vid = parts[1]
-            title = '\t'.join(parts[2:]) if len(parts) > 2 else ''
+            title = '\t'.join(parts[2:3]) if len(parts) > 2 else ''
+            if len(parts) >= 4 and parts[3] and 'playlist:' not in parts[3]:
+                playlist_title = parts[3]
             videos.append({"index": idx, "id": vid, "title": title})
         if args.max and len(videos) >= args.max:
             break
@@ -105,7 +108,7 @@ def main():
     emit_json({
         "status": "success",
         "playlist_id": playlist_id,
-        "playlist_title": f"playlist:{playlist_id}",
+        "playlist_title": playlist_title or f"playlist:{playlist_id}",
         "videos": videos,
         "count": len(videos),
     })
