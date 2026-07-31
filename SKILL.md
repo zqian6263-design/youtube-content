@@ -85,7 +85,7 @@ any authentication. Captions are fetched via YouTube's public endpoints.
 | `translate.py` | LLM subtitle translation (OpenAI-compatible API: DeepSeek/OpenAI). |
 | `watch_channel.py` | Watch channel/playlist for new videos → Markdown report (cron-friendly). |
 | `webui.py` | Flask web UI: paste URL → extract/transcribe → view + download (needs flask). |
-| `search.py` | Full-text search over extracted subtitles (FTS5 + CJK bigram tokenizer). |
+| `search.py` | Full-text search (FTS5 + CJK bigram) and `--ask` RAG Q&A over subtitles/notes. |
 | `fetch_audio_youtube.py` | Download audio stream via yt-dlp, convert to WAV. Supports `--start-sec/--end-sec`, cookies, auto-retry, bot/age detection. |
 | `youtube_utils.py` | Shared utilities: ID parsing, .env loading, VTT parsing, GPU detection. |
 | `cache.py` | SQLite cache (subtitles + transcripts + translations, 7-day TTL). |
@@ -196,6 +196,12 @@ python SKILL_DIR/scripts/webui.py --port 8080   # → http://127.0.0.1:8080
 python SKILL_DIR/scripts/search.py --index                     # build index
 python SKILL_DIR/scripts/search.py --query "贝叶斯" --context 2 # search with context
 python SKILL_DIR/scripts/search.py --query "heuristic" --file "CS50" --limit 5
+
+# RAG Q&A over your subtitle/note library (needs DEEPSEEK_API_KEY)
+python SKILL_DIR/scripts/search.py --ask "A*搜索和贪心搜索的区别？"
+
+# Archive structured notes to a knowledge base (Obsidian vault or any folder)
+python SKILL_DIR/scripts/analyze_youtube.py "URL" --archive "C:/Users/me/Obsidian/视频笔记"
 
 # Bilingual output (zh primary + en secondary, timestamp-aligned)
 python SKILL_DIR/scripts/analyze_youtube.py "URL" --languages zh-Hans,en --bilingual --timestamps

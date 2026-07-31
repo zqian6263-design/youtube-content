@@ -293,12 +293,74 @@ def format_results(result: dict) -> str:
     return '\n'.join(out)
 
 
+def ask_llm(question: str, matches: list, db_path=None, verbose=True):
+    """
+    RAG-style Q&A: use search matches as context, answer via LLM.
+
+    Returns {"status", "answer", "references"}
+    """
+    try:
+        import types as _types
+
+        from translate import call_llm, resolve_api_key
+    except ImportError:
+        return {"status": "failed", "message": "translate.py 不可用"}
+
+    key_args = _types.SimpleNamespace(api_key=None)
+    api_key = resolve_api_key(key_args)
+    if not api_key:
+        return {"status": "failed",
+                "message": "需要 DEEPSEEK_API_KEY / OPENAI_API_KEY 环境变量"}
+
+    base_url = os.environ.get('TRANSLATE_BASE_URL', 'https://api.deepseek.com/v1')
+    model = os.environ.get('TRANSLATE_MODEL', 'deepseek-chat')
+
+    # Build context from matches
+    ctx_parts = []
+    for m in matches:
+        name = Path(m['path']).name
+        ts = m.get('start_ts', '')
+        ctx_parts.append(f'[{name} @ {ts}] {m["text"]}')
+    context = '\n'.join(ctx_parts)
+
+    system = (
+        'You are a study assistant answering questions based ONLY on the '
+        'provided video subtitle excerpts. Answer in Chinese (简体中文) unless '
+        'the question is in another language. Be concise (3-8 sentences), '
+        'use bullet points when helpful. If the excerpts do not contain the '
+        'answer, say so directly. Cite the source file and timestamp '
+        'when you reference specific content.'
+    )
+    user = f'问题: {question}\n\n相关字幕片段:\n{context}'
+
+    try:
+        answer = call_llm(api_key, base_url, model, system, user, timeout=180)
+    except Exception as e:
+        return {"status": "failed", "message": f"LLM 调用失败: {str(e)[:200]}"}
+
+    references = [
+        {"file": Path(m['path']).name, "start_ts": m.get('start_ts', ''),
+         "text": m['text'][:150]}
+        for m in matches[:5]
+    ]
+    return {"status": "success", "answer": answer, "references": references}
+
+
 def main():
+    # Load .env so DEEPSEEK_API_KEY works for --ask
+    try:
+        from youtube_utils import load_env
+        load_env()
+    except ImportError:
+        pass
+
     parser = argparse.ArgumentParser(description='Search subtitles')
     parser.add_argument('--index', action='store_true', help='Build/rebuild index')
     parser.add_argument('--path', action='append', default=None,
                         help='Index source dir/file (repeatable; default: output/)')
     parser.add_argument('--query', default=None, help='Search query')
+    parser.add_argument('--ask', default=None,
+                        help='Ask a question (RAG: search + LLM answer)')
     parser.add_argument('--limit', type=int, default=10)
     parser.add_argument('--context', type=int, default=0,
                         help='Show N surrounding lines')
@@ -311,9 +373,63 @@ def main():
         print(json.dumps(result, ensure_ascii=False))
         return
 
-    if not args.query:
+    if not args.query and not args.ask:
         parser.print_help()
         sys.exit(1)
+
+    # RAG question answering
+    if args.ask:
+        # Extract meaningful keywords from the question (strip question words)
+        import re as _re
+        stop_zh = {'什么', '怎么', '如何', '为什么', '区别', '是否', '吗', '呢',
+                   '的', '了', '是', '在', '和', '与', '及', '一个', '可以',
+                   '能', '要', '会', '请', '介绍', '讲', '说', '解释', '比较'}
+        stop_en = {'what', 'how', 'why', 'is', 'are', 'the', 'a', 'an', 'of',
+                   'and', 'or', 'in', 'on', 'to', 'for', 'with', 'vs', 'difference',
+                   'between', 'explain', 'compare', 'tell', 'about', 'please'}
+        # ASCII keywords
+        ascii_kw = [w.lower() for w in _re.findall(r'[A-Za-z][A-Za-z0-9_*+-]*', args.ask)
+                    if w.lower() not in stop_en]
+        # CJK bigrams from the question
+        cjk_bigrams = []
+        cjk_run = ''.join(_re.findall(r'[\u4e00-\u9fff]+', args.ask))
+        for i in range(len(cjk_run) - 1):
+            pair = cjk_run[i:i + 2]
+            if pair not in cjk_bigrams:
+                cjk_bigrams.append(pair)
+
+        # Prefer ASCII keywords; fall back to CJK bigrams
+        # Filter: skip FTS wildcard chars and single letters
+        ascii_clean = [w for w in ascii_kw
+                       if len(w) >= 2 and not w.endswith('*') and '*' not in w]
+        search_parts = ascii_clean[:3]
+        if not search_parts:
+            # CJK bigrams, skipping overly-generic ones
+            generic = {'搜索', '什么', '区别', '是否', '这个', '那个', '一个'}
+            cjk_clean = [b for b in cjk_bigrams if b not in generic and b not in stop_zh]
+            search_parts = cjk_clean[:3]
+        search_query = ' '.join(search_parts) if search_parts else args.ask
+
+        result = search(search_query, limit=6, context=1, file_filter=args.file)
+        if result.get('status') != 'success' or not result.get('matches'):
+            print(json.dumps({
+                "status": "failed",
+                "message": f"未找到相关片段: {result.get('message', '')}"
+            }, ensure_ascii=False))
+            sys.exit(1)
+        answer = ask_llm(args.ask, result['matches'])
+        if args.json:
+            print(json.dumps(answer, ensure_ascii=False, indent=2))
+        else:
+            if answer.get('status') != 'success':
+                print(f"❌ {answer.get('message', '问答失败')}")
+            else:
+                print(f"❓ {args.ask}\n")
+                print(answer['answer'])
+                print('\n📎 参考片段:')
+                for ref in answer['references']:
+                    print(f"  [{ref['start_ts']}] {ref['file']}")
+        return
 
     result = search(args.query, limit=args.limit, context=args.context,
                     file_filter=args.file)

@@ -799,6 +799,49 @@ def test_search_index_and_query():
     print('  ✅ test_search_index_and_query')
 
 
+def test_archive_note_structure():
+    """Archive generates a structured markdown note with metadata + chapters."""
+    import tempfile
+
+    import analyze_youtube as az
+    with tempfile.TemporaryDirectory() as td:
+        result = {"source": "caption", "language": "en", "char_count": 100}
+        extra = {
+            "chapters": [
+                {"start_ts": "00:00", "title": "Intro"},
+                {"start_ts": "10:00", "title": "Methods"},
+            ],
+            "translated": "你好世界",
+            "translate_target": "zh",
+        }
+        note = az.archive_note(
+            "vid123", "Test Video", "[00:01] hello\n[00:05] world",
+            result, td, extra=extra)
+        p = Path(note)
+        assert p.exists()
+        text = p.read_text(encoding='utf-8')
+        assert '# Test Video' in text
+        assert '| 视频 ID | `vid123` |' in text
+        assert '## \U0001f4d1 \u7ae0\u8282' in text  # ## 📑 章节
+        assert '**00:00** Intro' in text
+        assert '## \U0001f310 \u7ffb\u8bd1' in text  # ## 🌐 翻译
+        assert '你好世界' in text
+        assert '## \U0001f4dd \u5168\u6587' in text  # ## 📝 全文
+        assert '[00:01] hello' in text
+    print('  ✅ test_archive_note_structure')
+
+
+def test_ask_llm_no_key_graceful():
+    """--ask without API key fails gracefully."""
+    import search
+    os.environ.pop('DEEPSEEK_API_KEY', None)
+    os.environ.pop('OPENAI_API_KEY', None)
+    result = search.ask_llm("test question", [{"path": "x.txt", "start_ts": "00:00", "text": "hi"}])
+    assert result['status'] == 'failed'
+    assert 'API key' in result['message'] or 'key' in result['message'].lower()
+    print('  ✅ test_ask_llm_no_key_graceful')
+
+
 def test_detect_chapters_full_pipeline():
     from chapters import detect_chapters, parse_subtitles
     # Simulate a 10-min video with 3 distinct topics
@@ -879,6 +922,8 @@ def run_all():
         test_search_extract_segments_timestamps,
         test_search_long_line_splitting,
         test_search_index_and_query,
+        test_archive_note_structure,
+        test_ask_llm_no_key_graceful,
     ]
     failures = 0
     for t in tests:

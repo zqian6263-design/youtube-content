@@ -204,6 +204,58 @@ def generate_chapters(transcript, video_id, title, window_sec=60.0,
     return chapters, str(ch_path)
 
 
+def archive_note(video_id, title, transcript, result, archive_dir, extra=None):
+    """
+    Write a structured markdown note to the knowledge-base directory.
+
+    Note layout:
+      # 标题
+      | 元数据表 |
+      ## 章节 (if chapters)
+      ## 翻译 (if translated)
+      ## 全文
+
+    Returns path of the written note.
+    """
+    archive_dir = Path(archive_dir)
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    safe_title = safe_filename(title)
+    note_path = archive_dir / f'{video_id}_{safe_title}.md'
+
+    from datetime import datetime
+    lines = [f'# {title}', '']
+    lines.append('| 字段 | 值 |')
+    lines.append('|------|-----|')
+    lines.append(f'| 视频 ID | `{video_id}` |')
+    lines.append(f'| 来源 | {result.get("source", "caption")} |')
+    lines.append(f'| 语言 | {result.get("language", result.get("source", ""))} |')
+    lines.append(f'| 字符数 | {result.get("char_count", len(transcript))} |')
+    lines.append(f'| 归档时间 | {datetime.now().strftime("%Y-%m-%d %H:%M")} |')
+    lines.append('')
+
+    chapters = extra.get('chapters') if extra else None
+    if chapters:
+        lines.append('## 📑 章节')
+        lines.append('')
+        for c in chapters:
+            lines.append(f'- **{c["start_ts"]}** {c["title"]}')
+        lines.append('')
+
+    translated = extra.get('translated') if extra else None
+    if translated:
+        lines.append(f'## 🌐 翻译（{extra.get("translate_target", "zh")}）')
+        lines.append('')
+        lines.append(translated)
+        lines.append('')
+
+    lines.append('## 📝 全文')
+    lines.append('')
+    lines.append(transcript)
+
+    note_path.write_text('\n'.join(lines), encoding='utf-8')
+    return str(note_path)
+
+
 def convert_subtitles_to(segments, fmt, video_id, title):
     """
     Convert precise segments to srt/vtt/lrc/txt and save alongside output.
@@ -693,6 +745,25 @@ def process_one_video(video, args, whisper_model, device,
                         result["translated_file"] = tr_path
                         result["translated_char_count"] = len(tr_text)
 
+                # Optional: archive structured note to knowledge base
+                if args.archive:
+                    archive_extra = {}
+                    if result.get('chapters'):
+                        archive_extra['chapters'] = result['chapters']
+                    if result.get('translated_file'):
+                        try:
+                            tlines = Path(result['translated_file']).read_text(
+                                encoding='utf-8').split('\n')
+                            archive_extra['translated'] = '\n'.join(tlines[3:])
+                            archive_extra['translate_target'] = args.translate_target
+                        except OSError:
+                            pass
+                    note_path = archive_note(
+                        video_id, title, transcript, result,
+                        args.archive, extra=archive_extra)
+                    result['archive_file'] = note_path
+                    eprint(f'📚 已归档笔记: {note_path}')
+
                 eprint(f'✅ 字幕已提取 ({sub_result.get("subtitle_count", 0)} 条)')
                 return result
             # else: fall through to Whisper pipeline
@@ -879,6 +950,9 @@ def main():
                         help='Translation model (default: deepseek-chat)')
     parser.add_argument('--bilingual-translate', action='store_true',
                         help='With --translate: interleave original + translated lines')
+    parser.add_argument('--archive', default=None,
+                        help='Archive a structured markdown note to this directory '
+                             '(Obsidian vault or any folder)')
     parser.add_argument('--from', dest='time_from', default=None,
                         help='Only process from this time (90, 01:30, 1:02:30)')
     parser.add_argument('--to', dest='time_to', default=None,
