@@ -68,19 +68,37 @@ def run(cmd, timeout=600):
 
 
 def fetch_subtitles(bvid: str) -> dict:
-    """Try CC subtitles via the bilibili-content skill."""
+    """Try CC subtitles via the bilibili-content skill, with retries.
+
+    Bilibili's player API intermittently fails (empty_subtitle_url etc.);
+    retrying usually recovers.
+    """
     if not BILI_SKILL_DIR:
         return {"status": "failed", "phase": "skill",
                 "message": "bilibili-content skill 未找到"}
     fetch_py = BILI_SKILL_DIR / 'scripts' / 'fetch_subtitle.py'
-    result = run([sys.executable, str(fetch_py), bvid, '--json'], timeout=120)
-    try:
-        idx = result.stdout.find('{')
-        data = json.loads(result.stdout[idx:]) if idx >= 0 else {}
-    except json.JSONDecodeError:
-        return {"status": "failed", "phase": "parse",
-                "message": result.stdout[:200]}
-    return data
+    last = {"status": "failed", "phase": "retry", "message": "所有重试均失败"}
+    for attempt in range(3):
+        result = run([sys.executable, str(fetch_py), bvid, '--json'], timeout=120)
+        try:
+            idx = result.stdout.find('{')
+            data = json.loads(result.stdout[idx:]) if idx >= 0 else {}
+        except json.JSONDecodeError:
+            last = {"status": "failed", "phase": "parse",
+                    "message": result.stdout[:200]}
+            continue
+        if data.get('has_subtitles') is True or data.get('status') == 'success':
+            return data
+        last = data
+        if attempt < 2:
+            time.sleep(1.5 * (attempt + 1))
+    # Normalize to our JSON shape
+    return {
+        "status": "failed",
+        "phase": last.get('phase', 'subtitle'),
+        "message": last.get('message') or last.get('error') or '字幕获取失败',
+        "video_id": bvid,
+    }
 
 
 def download_audio(bvid: str, out_wav: Path) -> tuple:
@@ -172,8 +190,11 @@ def main():
     # Step 1: CC subtitles (skip if --force-whisper)
     if not args.force_whisper:
         sub = fetch_subtitles(bvid)
-        if sub.get('status') == 'success':
-            transcript = sub.get('transcript') or sub.get('subtitles') or ''
+        has_subs = (sub.get('has_subtitles') is True
+                    or sub.get('status') == 'success')
+        transcript = (sub.get('transcript') or sub.get('subtitles')
+                      or sub.get('text') or '') if has_subs else ''
+        if has_subs and transcript:
             result = {
                 "status": "success",
                 "source": "bilibili_caption",
@@ -181,7 +202,7 @@ def main():
                 "title": sub.get('title') or bvid,
                 "transcript": transcript,
                 "char_count": len(transcript),
-                "message": "B站 CC 字幕已提取",
+                "message": "B站字幕已提取",
             }
             print(json.dumps(result, ensure_ascii=False))
             return
@@ -190,7 +211,7 @@ def main():
             print(json.dumps({
                 "status": "needs_confirmation",
                 "video_id": bvid,
-                "message": "此 B站视频无可用 CC 字幕（或 cookie 失效）。"
+                "message": "此 B站视频无可用字幕（或获取失败）。"
                            "是否用 Whisper 转写音频？",
                 "detail": sub.get('message', '')[:100],
                 "next_command": f"--whisper {bvid}",

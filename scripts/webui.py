@@ -406,14 +406,18 @@ def api_quick():
     if data.get('status') != 'success':
         return jsonify(data)
 
-    # Attach transcript text (skip header)
-    text = ''
-    try:
-        p = Path(data.get('transcript_file', ''))
-        lines = p.read_text(encoding='utf-8').split('\n')
-        text = '\n'.join(lines[3:])[:max_chars]
-    except OSError:
-        pass
+    # Attach transcript text (skip header; prefer inline transcript for
+    # bilibili path which does not write a transcript_file)
+    text = data.get('transcript', '')
+    if not text:
+        try:
+            p = Path(data.get('transcript_file', ''))
+            lines = p.read_text(encoding='utf-8').split('\n')
+            text = '\n'.join(lines[3:])[:max_chars]
+        except OSError:
+            pass
+    else:
+        text = text[:max_chars]
 
     # LLM summary (Simplified Chinese, cached) when requested
     summary = None
