@@ -1,0 +1,6 @@
+{
+  "channels": [
+    {"name": "3Blue1Brown", "url": "@3blue1brown", "max": 3},
+    {"name": "CS50", "url": "@cs50", "max": 3}
+  ]
+}

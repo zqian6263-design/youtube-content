@@ -109,33 +109,16 @@ def summarize(transcript: str, max_chars: int = 600) -> str:
     return text[:max_chars] + ('…' if len(text) > max_chars else '')
 
 
-def main():
-    parser = argparse.ArgumentParser(description='Watch channel for new videos')
-    parser.add_argument('--channel', default=None,
-                        help='Channel handle/URL (@handle, /channel/UCxxx)')
-    parser.add_argument('--url', default=None,
-                        help='Full URL (overrides --channel)')
-    parser.add_argument('--max', type=int, default=5,
-                        help='Check the N most recent videos (default: 5)')
-    parser.add_argument('--cookies', default=None, help='cookies.txt path')
-    parser.add_argument('--languages', default='zh-Hans,zh-Hant,en')
-    parser.add_argument('--translate', action='store_true',
-                        help='Translate subtitles (needs DEEPSEEK_API_KEY)')
-    parser.add_argument('--json', action='store_true',
-                        help='Also write machine-readable report to watch_report.json')
-    args = parser.parse_args()
+def process_channel(url: str, max_videos: int, args) -> dict:
+    """
+    Process a single channel: list videos, find new ones, extract subtitles.
 
-    url = args.url or args.channel
-    if not url:
-        print('需要 --channel 或 --url')
-        sys.exit(1)
-    if not url.startswith('http'):
-        url = f'https://www.youtube.com/{url.lstrip("/")}'
-
-    videos = list_channel_videos(url, args.max, args.cookies)
+    Returns {"channel": url, "new_count": N, "report_lines": [...], "results": [...]}
+    """
+    videos = list_channel_videos(url, max_videos, args.cookies)
     if not videos:
-        sys.stderr.write('无法获取视频列表（网络/风控？）\n')
-        sys.exit(1)
+        sys.stderr.write(f'⚠ 无法获取视频列表: {url}（网络/风控？）\n')
+        return {"channel": url, "new_count": 0, "report_lines": [], "results": []}
 
     cache = Cache()
     new_videos = []
@@ -148,54 +131,152 @@ def main():
             continue  # already processed
         new_videos.append(v)
 
-    # Nothing new → empty stdout (cron silent mode)
-    if not new_videos:
-        cache.close()
+    section = []
+    results = []
+    if new_videos:
+        for v in new_videos:
+            vid = v['id']
+            sys.stderr.write(f'📥 提取 {vid} ({v["title"][:40]})...\n')
+            sub = extract_subtitles(vid, args.languages, args.cookies)
+            if sub.get('status') == 'success':
+                transcript = sub.get('subtitles', '')
+                duration = v['duration_sec'] or get_video_duration(vid)
+                summary = summarize(transcript)
+                section.append(f'## 🎬 {v["title"]}')
+                section.append(f'- 链接: https://youtu.be/{vid}')
+                section.append(f'- 时长: {duration // 60} 分 {duration % 60} 秒')
+                section.append(f'- 字幕: {len(transcript)} 字符')
+                if summary:
+                    section.append(f'- 摘要: {summary}')
+                section.append('')
+                results.append({
+                    "id": vid, "title": v["title"], "status": "success",
+                    "char_count": len(transcript), "duration_sec": duration,
+                })
+                # Cache the result so next run skips this video
+                cache.set_subtitles(vid, args.languages, False, sub)
+            else:
+                section.append(f'## ⚠️ {v["title"]}')
+                section.append(f'- 链接: https://youtu.be/{vid}')
+                section.append(f'- 状态: 字幕提取失败（{sub.get("message", "未知")[:100]}）')
+                section.append('')
+                results.append({
+                    "id": vid, "title": v["title"], "status": "failed",
+                    "message": sub.get("message", "unknown")[:200],
+                })
+    cache.close()
+    return {"channel": url, "new_count": len(new_videos),
+            "report_lines": section, "results": results}
+
+
+def load_config(path: str) -> list:
+    """Load channel list from a JSON config file."""
+    import json
+    with open(path, encoding='utf-8') as f:
+        data = json.load(f)
+    channels = data.get('channels', [])
+    if not isinstance(channels, list) or not channels:
+        raise ValueError(f'配置文件 {path} 需要 "channels" 列表')
+    return channels
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Watch channel for new videos')
+    parser.add_argument('--channel', default=None,
+                        help='Channel handle/URL (@handle, /channel/UCxxx)')
+    parser.add_argument('--url', default=None,
+                        help='Full URL (overrides --channel)')
+    parser.add_argument('--config', default=None,
+                        help='JSON config with multiple channels: '
+                             '{"channels": [{"name": "...", "url": "@handle", "max": 3}]}')
+    parser.add_argument('--weekly', action='store_true',
+                        help='Weekly report mode (aggregate all channels)')
+    parser.add_argument('--max', type=int, default=5,
+                        help='Check the N most recent videos (default: 5)')
+    parser.add_argument('--cookies', default=None, help='cookies.txt path')
+    parser.add_argument('--languages', default='zh-Hans,zh-Hant,en')
+    parser.add_argument('--translate', action='store_true',
+                        help='Translate subtitles (needs DEEPSEEK_API_KEY)')
+    parser.add_argument('--json', action='store_true',
+                        help='Also write machine-readable report to watch_report.json')
+    args = parser.parse_args()
+
+    # ── Multi-channel mode ──────────────────────────────────────────────
+    if args.config:
+        try:
+            channels = load_config(args.config)
+        except (OSError, ValueError, json.JSONDecodeError) as e:
+            print(f'❌ 配置加载失败: {e}')
+            sys.exit(1)
+
+        all_results = []
+        total_new = 0
+        if args.weekly:
+            from datetime import date
+            report_lines = [f'# 📊 视频周报（{date.today().isoformat()}）', '']
+        else:
+            report_lines = ['# 🔔 频道新视频（多频道）', '']
+
+        for ch in channels:
+            ch_url = ch.get('url', '')
+            ch_name = ch.get('name', ch_url)
+            ch_max = ch.get('max', args.max)
+            if not ch_url.startswith('http'):
+                ch_url = f'https://www.youtube.com/{ch_url.lstrip("/")}'
+            sys.stderr.write(f'📡 检查频道: {ch_name}\n')
+            result = process_channel(ch_url, ch_max, args)
+            total_new += result['new_count']
+            all_results.extend(result['results'])
+            if result['new_count']:
+                report_lines.append(f'## 📺 {ch_name}')
+                report_lines.append('')
+                report_lines.extend(result['report_lines'])
+
+        if not all_results:
+            return  # nothing new → silent (cron)
+
+        report_lines.insert(2, f'共 {total_new} 个新视频（{len(channels)} 个频道）')
+        report_lines.insert(3, '')
+        report = '\n'.join(report_lines).strip()
+        if args.json:
+            with open(SCRIPT_DIR / 'watch_report.json', 'w', encoding='utf-8') as f:
+                json.dump({
+                    "generated_at": datetime.now().isoformat(timespec='seconds'),
+                    "new_count": len(all_results),
+                    "channels": len(channels),
+                    "videos": all_results,
+                }, f, ensure_ascii=False, indent=2)
+        print(report)
         return
 
-    # Process new videos (subtitle extraction only — fast path)
-    report_lines = ['# 🔔 频道新视频', '', f'共 {len(new_videos)} 个新视频', '']
-    results = []
-    for v in new_videos:
-        vid = v['id']
-        sys.stderr.write(f'📥 提取 {vid} ({v["title"][:40]})...\n')
-        sub = extract_subtitles(vid, args.languages, args.cookies)
-        if sub.get('status') == 'success':
-            transcript = sub.get('subtitles', '')
-            duration = v['duration_sec'] or get_video_duration(vid)
-            summary = summarize(transcript)
-            report_lines.append(f'## 🎬 {v["title"]}')
-            report_lines.append(f'- 链接: https://youtu.be/{vid}')
-            report_lines.append(f'- 时长: {duration // 60} 分 {duration % 60} 秒')
-            report_lines.append(f'- 字幕: {len(transcript)} 字符')
-            if summary:
-                report_lines.append(f'- 摘要: {summary}')
-            report_lines.append('')
-            results.append({
-                "id": vid, "title": v["title"], "status": "success",
-                "char_count": len(transcript), "duration_sec": duration,
-            })
-            # Cache the result so next run skips this video
-            cache.set_subtitles(vid, args.languages, False, sub)
-        else:
-            report_lines.append(f'## ⚠️ {v["title"]}')
-            report_lines.append(f'- 链接: https://youtu.be/{vid}')
-            report_lines.append(f'- 状态: 字幕提取失败（{sub.get("message", "未知")[:100]}）')
-            report_lines.append('')
-            results.append({
-                "id": vid, "title": v["title"], "status": "failed",
-                "message": sub.get("message", "unknown")[:200],
-            })
+    # ── Single-channel mode (backward compatible) ───────────────────────
+    url = args.url or args.channel
+    if not url:
+        print('需要 --channel / --url / --config')
+        sys.exit(1)
+    if not url.startswith('http'):
+        url = f'https://www.youtube.com/{url.lstrip("/")}'
 
-    cache.close()
+    result = process_channel(url, args.max, args)
 
+    if not result['results']:
+        return  # nothing new → silent
+
+    if args.weekly:
+        from datetime import date
+        report_lines = [f'# 📊 视频周报（{date.today().isoformat()}）', '',
+                        f'共 {result["new_count"]} 个新视频', '']
+    else:
+        report_lines = ['# 🔔 频道新视频', '', f'共 {result["new_count"]} 个新视频', '']
+    report_lines.extend(result['report_lines'])
     report = '\n'.join(report_lines).strip()
+
     if args.json:
         with open(SCRIPT_DIR / 'watch_report.json', 'w', encoding='utf-8') as f:
             json.dump({
                 "generated_at": datetime.now().isoformat(timespec='seconds'),
-                "new_count": len(results),
-                "videos": results,
+                "new_count": len(result['results']),
+                "videos": result['results'],
             }, f, ensure_ascii=False, indent=2)
 
     print(report)

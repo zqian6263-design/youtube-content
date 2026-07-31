@@ -842,6 +842,73 @@ def test_ask_llm_no_key_graceful():
     print('  ✅ test_ask_llm_no_key_graceful')
 
 
+def test_watch_load_config():
+    import tempfile
+
+    import watch_channel as wc
+    with tempfile.TemporaryDirectory() as td:
+        cfg = Path(td) / 'watch.json'
+        cfg.write_text('{"channels": [{"name": "A", "url": "@a", "max": 3}, {"name": "B", "url": "@b"}]}',
+                       encoding='utf-8')
+        channels = wc.load_config(str(cfg))
+        assert len(channels) == 2
+        assert channels[0]['name'] == 'A'
+        assert channels[0]['max'] == 3
+        assert channels[1].get('max') is None  # optional
+    print('  ✅ test_watch_load_config')
+
+
+def test_watch_load_config_invalid():
+    import tempfile
+
+    import watch_channel as wc
+    with tempfile.TemporaryDirectory() as td:
+        cfg = Path(td) / 'bad.json'
+        cfg.write_text('{"channels": []}', encoding='utf-8')
+        try:
+            wc.load_config(str(cfg))
+            assert False, 'should raise'
+        except ValueError:
+            pass
+    print('  ✅ test_watch_load_config_invalid')
+
+
+def test_watch_process_channel_mock():
+    """process_channel with mocked network + isolated cache."""
+    import tempfile
+    import types
+
+    import watch_channel as wc
+    from cache import Cache
+
+    orig_list = wc.list_channel_videos
+    orig_extract = wc.extract_subtitles
+    orig_cache = wc.Cache
+    wc.list_channel_videos = lambda url, max_v, cookies: [
+        {"id": "vidAAA", "title": "New A", "duration_sec": 60},
+    ]
+    wc.extract_subtitles = lambda vid, langs, cookies: {
+        "status": "success", "subtitles": "[00:01] hello world", "language": "en",
+    }
+    with tempfile.TemporaryDirectory() as td:
+        wc.Cache = lambda: Cache(db_path=Path(td) / 'test.db')
+        try:
+            args = types.SimpleNamespace(cookies=None, languages='zh-Hans,zh-Hant,en', max=5)
+            result = wc.process_channel("https://www.youtube.com/@test", 5, args)
+            assert result['new_count'] == 1
+            assert len(result['results']) == 1
+            assert result['results'][0]['status'] == 'success'
+            assert any('hello world' in line for line in result['report_lines'])
+            # Second run should skip (cached)
+            result2 = wc.process_channel("https://www.youtube.com/@test", 5, args)
+            assert result2['new_count'] == 0
+        finally:
+            wc.list_channel_videos = orig_list
+            wc.extract_subtitles = orig_extract
+            wc.Cache = orig_cache
+    print('  ✅ test_watch_process_channel_mock')
+
+
 def test_detect_chapters_full_pipeline():
     from chapters import detect_chapters, parse_subtitles
     # Simulate a 10-min video with 3 distinct topics
@@ -924,6 +991,9 @@ def run_all():
         test_search_index_and_query,
         test_archive_note_structure,
         test_ask_llm_no_key_graceful,
+        test_watch_load_config,
+        test_watch_load_config_invalid,
+        test_watch_process_channel_mock,
     ]
     failures = 0
     for t in tests:

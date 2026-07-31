@@ -190,6 +190,9 @@ python SKILL_DIR/scripts/analyze_youtube.py "URL" --translate --bilingual-transl
 python SKILL_DIR/scripts/watch_channel.py --channel "@handle" --max 5
 python SKILL_DIR/scripts/watch_channel.py --channel "@handle" --max 5 --cookies cookies.txt
 
+# Multi-channel weekly report (config: watch_config.example.json)
+python SKILL_DIR/scripts/watch_channel.py --config watch_config.json --weekly
+
 # Web UI (needs: pip install flask)
 python SKILL_DIR/scripts/webui.py --port 8080   # → http://127.0.0.1:8080
 
