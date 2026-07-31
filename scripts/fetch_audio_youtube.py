@@ -31,6 +31,10 @@ def main():
     parser.add_argument('--video-id', required=True, help='YouTube video ID or URL')
     parser.add_argument('--output', required=True, help='Output .wav file path')
     parser.add_argument('--temp-dir', default=None, help='Temp directory for downloads')
+    parser.add_argument('--start-sec', type=float, default=None,
+                        help='Only download audio starting at this second')
+    parser.add_argument('--end-sec', type=float, default=None,
+                        help='Only download audio up to this second')
     args = parser.parse_args()
 
     video_id = extract_video_id(args.video_id)
@@ -56,6 +60,11 @@ def main():
             '-o', str(temp_dir / '%(id)s.%(ext)s'),
             video_id
         ]
+        # Optional time range: only download a section
+        if args.start_sec is not None or args.end_sec is not None:
+            start = args.start_sec or 0
+            end = args.end_sec if args.end_sec is not None else ''
+            yt_dlp_cmd += ['--download-sections', f'*{start}-{end}']
         dl_result = subprocess.run(
             yt_dlp_cmd, capture_output=True, text=True, timeout=600
         )

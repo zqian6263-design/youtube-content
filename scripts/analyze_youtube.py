@@ -67,6 +67,27 @@ def eprint(*args, **kwargs):
     print(*args, file=sys.stderr, **kwargs)
 
 
+def parse_time_arg(value: str | None) -> float | None:
+    """Parse 'MM:SS', 'HH:MM:SS', or plain seconds into a float."""
+    if value is None:
+        return None
+    value = value.strip()
+    if not value:
+        return None
+    parts = value.split(':')
+    try:
+        if len(parts) == 3:
+            h, m, s = parts
+            return int(h) * 3600 + int(m) * 60 + float(s)
+        if len(parts) == 2:
+            m, s = parts
+            return int(m) * 60 + float(s)
+        return float(value)
+    except ValueError:
+        eprint(f'⚠ 无法解析时间: {value!r}（支持 90、01:30、1:02:30）')
+        return None
+
+
 def run_script(script_path, *args, timeout=300):
     cmd = [sys.executable, str(script_path)] + list(args)
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
@@ -224,7 +245,8 @@ def run_whisper_pipeline(video_id, video_url, title, whisper_model, device,
                          whisper_language, timestamps, backend='openai',
                          chunk_minutes=0, chunk_workers=0,
                          chapters=False, chapter_window_sec=60.0,
-                         chapter_min=3, chapter_max=20, chapter_top_words=4):
+                         chapter_min=3, chapter_max=20, chapter_top_words=4,
+                         time_from=None, time_to=None):
     """Download audio and transcribe with Whisper."""
     safe_id = safe_video_id(video_url, fallback=video_id or 'video')
 
@@ -232,7 +254,8 @@ def run_whisper_pipeline(video_id, video_url, title, whisper_model, device,
     # (most expensive step — worth caching; avoids network + disk entirely)
     cache = get_cache()
     cached = cache.get_transcript(safe_id, whisper_model, backend)
-    if cached and cached.get('status') == 'success':
+    if cached and cached.get('status') == 'success' and time_from is None and time_to is None:
+        # Cache is for the full video — skip when a time range is requested
         eprint(f'📦 命中转写缓存: {safe_id}')
         cached_text = cached.get('text', '')
         cached_title = cached.get('title', title)
@@ -272,6 +295,10 @@ def run_whisper_pipeline(video_id, video_url, title, whisper_model, device,
         '--output', str(whisper_temp / f'{safe_id}.wav'),
         '--temp-dir', str(whisper_temp),
     ]
+    if time_from is not None:
+        audio_args += ['--start-sec', str(time_from)]
+    if time_to is not None:
+        audio_args += ['--end-sec', str(time_to)]
     wo, we, wc = run_script(FETCH_AUDIO_PY, *audio_args, timeout=600)
 
     try:
@@ -472,6 +499,20 @@ def process_one_video(video, args, whisper_model, device,
                     pass  # Default mode: still succeed with captions
 
             if not (suspicious and mode in ('auto', 'whisper')):
+                # Time-range filter: keep only segments within [from, to]
+                if args.time_from_sec is not None or args.time_to_sec is not None:
+                    segments = sub_result.get('segments') or []
+                    t_from = args.time_from_sec or 0.0
+                    t_to = args.time_to_sec or float('inf')
+                    filtered = [s for s in segments
+                                if s.get('start', 0) >= t_from and s.get('start', 0) <= t_to]
+                    if filtered:
+                        from convert_subtitles import convert_segments
+                        transcript = convert_segments(filtered, 'txt')
+                        sub_result['segments'] = filtered
+                        sub_result['subtitle_count'] = len(filtered)
+                        eprint(f'⏱ 时间过滤: {len(segments)} → {len(filtered)} 条字幕')
+
                 # Bilingual: interleave primary + secondary captions
                 secondary = sub_result.get('secondary_subtitles')
                 if secondary:
@@ -577,7 +618,8 @@ def process_one_video(video, args, whisper_model, device,
         whisper_language, args.timestamps, args.backend,
         args.chunk_minutes, args.chunk_workers,
         args.chapters, args.chapter_window_sec,
-        args.chapter_min, args.chapter_max, args.chapter_top_words
+        args.chapter_min, args.chapter_max, args.chapter_top_words,
+        args.time_from_sec, args.time_to_sec
     )
 
 
@@ -694,10 +736,21 @@ def main():
                         help='OpenAI-compatible API base URL (default: DeepSeek)')
     parser.add_argument('--translate-model', default=None,
                         help='Translation model (default: deepseek-chat)')
+    parser.add_argument('--from', dest='time_from', default=None,
+                        help='Only process from this time (90, 01:30, 1:02:30)')
+    parser.add_argument('--to', dest='time_to', default=None,
+                        help='Only process up to this time (90, 01:30, 1:02:30)')
     args = parser.parse_args()
 
     # Load .env if present (does not override existing env vars)
     load_env()
+
+    # Parse time range (--from/--to)
+    args.time_from_sec = parse_time_arg(args.time_from)
+    args.time_to_sec = parse_time_arg(args.time_to)
+    if args.time_from_sec is not None or args.time_to_sec is not None:
+        eprint(f'⏱ 时间范围: {args.time_from_sec or 0:.0f}s → '
+               f'{args.time_to_sec if args.time_to_sec is not None else "END"}s')
 
     # ── Configuration from env ──────────────────────────────────────────
     whisper_model = args.whisper_model or os.environ.get('WHISPER_MODEL', 'small')

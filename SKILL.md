@@ -83,9 +83,10 @@ any authentication. Captions are fetched via YouTube's public endpoints.
 | `chapters.py` | Auto chapter detection (TextTiling: window similarity → topic boundaries → keyword titles). |
 | `convert_subtitles.py` | Convert segments to SRT / VTT / LRC / TXT (players, editors, lyrics). |
 | `translate.py` | LLM subtitle translation (OpenAI-compatible API: DeepSeek/OpenAI). |
+| `fetch_audio_youtube.py` | Download audio stream via yt-dlp, convert to WAV. Supports `--start-sec/--end-sec` section download. |
 | `youtube_utils.py` | Shared utilities: ID parsing, .env loading, VTT parsing, GPU detection. |
 | `cache.py` | SQLite cache (subtitles + transcripts, 7-day TTL). |
-| `tests/test_youtube_utils.py` | 37 unit tests. Run: `python tests/test_youtube_utils.py` |
+| `tests/test_youtube_utils.py` | 39 unit tests. Run: `python tests/test_youtube_utils.py` |
 
 ## Usage Strategy
 
@@ -168,6 +169,9 @@ python SKILL_DIR/scripts/analyze_youtube.py "URL" --format vtt --timestamps
 export DEEPSEEK_API_KEY=sk-xxx
 python SKILL_DIR/scripts/analyze_youtube.py "URL" --translate
 python SKILL_DIR/scripts/analyze_youtube.py "URL" --translate --translate-target ja  # to Japanese
+
+# Time range: only process a section (90, 01:30, 1:02:30)
+python SKILL_DIR/scripts/analyze_youtube.py "URL" --from 10:00 --to 20:00
 
 # Bilingual output (zh primary + en secondary, timestamp-aligned)
 python SKILL_DIR/scripts/analyze_youtube.py "URL" --languages zh-Hans,en --bilingual --timestamps

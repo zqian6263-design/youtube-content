@@ -538,6 +538,35 @@ def test_translate_no_key_fails_gracefully():
     print('  ✅ test_translate_no_key_fails_gracefully')
 
 
+# ── Time range parsing ──────────────────────────────────────────────────
+
+def test_parse_time_arg():
+    import analyze_youtube as az
+    assert az.parse_time_arg(None) is None
+    assert az.parse_time_arg('') is None
+    assert az.parse_time_arg('90') == 90.0
+    assert az.parse_time_arg('01:30') == 90.0
+    assert az.parse_time_arg('1:02:30') == 3750.0
+    assert az.parse_time_arg(' 45 ') == 45.0
+    assert az.parse_time_arg('abc') is None  # invalid → None
+    print('  ✅ test_parse_time_arg')
+
+
+def test_time_filter_segments():
+    from convert_subtitles import convert_segments
+    segments = [
+        {"start": 10.0, "duration": 2.0, "text": "early"},
+        {"start": 50.0, "duration": 2.0, "text": "middle"},
+        {"start": 90.0, "duration": 2.0, "text": "late"},
+    ]
+    t_from, t_to = 0.0, 60.0
+    filtered = [s for s in segments if s['start'] >= t_from and s['start'] <= t_to]
+    assert len(filtered) == 2
+    txt = convert_segments(filtered, 'txt')
+    assert 'early' in txt and 'middle' in txt and 'late' not in txt
+    print('  ✅ test_time_filter_segments')
+
+
 def test_detect_chapters_full_pipeline():
     from chapters import detect_chapters, parse_subtitles
     # Simulate a 10-min video with 3 distinct topics
@@ -604,6 +633,8 @@ def run_all():
         test_split_chunks_large_text,
         test_resolve_api_key_priority,
         test_translate_no_key_fails_gracefully,
+        test_parse_time_arg,
+        test_time_filter_segments,
     ]
     failures = 0
     for t in tests:
