@@ -1168,13 +1168,20 @@ def test_bilibili_cookies_file():
 def test_subtitle_mismatch_detection():
     """Bilibili AI-subtitle mismatch guard."""
     from bilibili_bridge import subtitle_mismatch
-    # Matching: title keywords appear in transcript
+    # Matching: ASCII + Chinese keywords appear
     assert subtitle_mismatch('RAG 工作机制详解',
-                             '本文讲解 RAG 检索增强生成的原理') is None
-    # Mismatch: title keywords absent (wrong video's subs)
+                             '本文讲解 RAG 的机制与检索增强生成的原理') is None
+    # Mismatch: ASCII keyword absent (wrong video's subs)
     r = subtitle_mismatch('RAG 工作机制详解',
                           '无法改变现状 那就享受当下 别为了打翻的牛奶而哭泣')
     assert r is not None and 'rag' in r
+    # Mismatch: ASCII present but no Chinese keyword (generic-word bypass)
+    r2 = subtitle_mismatch('【RAG-全集】最适合新手的大模型RAG入门课程',
+                           '看完评测 苹果内忧外患 但模型结论一致')
+    assert r2 is not None
+    # Matching: real RAG content with rag + 模型
+    assert subtitle_mismatch('【RAG-全集】最适合新手的大模型RAG入门课程',
+                             '再聪明的模型也回答不了问题 RAG 是一套架构') is None
     # Empty inputs → None
     assert subtitle_mismatch('', '') is None
     print('  ✅ test_subtitle_mismatch_detection')

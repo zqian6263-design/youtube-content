@@ -899,7 +899,16 @@ def process_bilibili(video: str, args) -> dict:
     try:
         cached = cache.get_subtitles(video, 'bilibili', False)
         if cached and cached.get('status') == 'success':
-            return cached
+            # Re-verify cached subtitles against the title (a stale cache
+            # may hold mismatched AI subs written by an older version)
+            from bilibili_bridge import subtitle_mismatch
+            cached_title = cached.get('title') or video
+            cached_text = (cached.get('transcript') or cached.get('text') or '')
+            if cached_title and cached_text:
+                if subtitle_mismatch(cached_title, cached_text):
+                    cache.delete(f'sub:{video}:bilibili:no-ts')
+                else:
+                    return cached
     finally:
         cache.close()
 

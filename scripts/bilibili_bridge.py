@@ -80,26 +80,34 @@ def subtitle_mismatch(title: str, transcript: str) -> str | None:
 
     if not title or not transcript:
         return None
-    stop = {'机制', '详解', '工作', '流程', '教程', '视频', '什么', '如何',
-            '一个', '背后', '全', '技术', '知识', '介绍', '讲解'}
+    stop = {'什么', '如何', '一个', '背后', '教程', '视频', '这个', '那个',
+            '这些', '那些', '为什么', '怎么', '里面', '之间'}
     text_lower = transcript.lower()
     # ASCII keywords (RAG, API, LLM, ...)
     ascii_kws = [w.lower() for w in _re.findall(r'[A-Za-z]{2,}', title)
                  if w.lower() not in {'the', 'and', 'for', 'with'}]
-    # Chinese keywords: 2-4 char tokens
+    # Chinese keywords: sliding-window bigrams (catches 模型 from 大模型)
     zh_kws = []
     for m in _re.findall(r'[\u4e00-\u9fff]{2,}', title):
-        for i in range(0, len(m) - 1, 2):
+        for i in range(len(m) - 1):
             tok = m[i:i+2]
             if tok not in stop and len(tok) == 2:
                 zh_kws.append(tok)
     if not ascii_kws and not zh_kws:
         return None
-    # If the title's keywords appear at least once → likely consistent
-    hits = [kw for kw in ascii_kws + zh_kws if kw in text_lower]
-    if hits:
-        return None
-    return (f'字幕与标题不匹配（标题关键词 {", ".join((ascii_kws + zh_kws)[:3])} '
+    # Hits per category (Bilibili's AI subs are randomly mismatched, so a
+    # single generic hit is not enough — ASCII title terms MUST appear)
+    ascii_hits = [kw for kw in ascii_kws if kw in text_lower]
+    zh_hits = [kw for kw in zh_kws if kw in text_lower]
+    if ascii_kws:
+        if ascii_hits and zh_hits:
+            return None
+        if ascii_hits and not zh_kws:
+            return None
+    elif zh_kws:
+        if len(zh_hits) >= 2:
+            return None
+    return (f'字幕与标题不匹配（标题关键词 {" ".join((ascii_kws + zh_kws)[:3])} '
             f'未在字幕中出现），疑似 B站 AI 字幕错配')
 
 
