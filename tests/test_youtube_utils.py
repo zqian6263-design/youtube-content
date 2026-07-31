@@ -288,7 +288,6 @@ def test_get_audio_duration_wav():
             print(f'  ✅ test_get_audio_duration_wav ({dur:.1f}s)')
         else:
             print('  ⚠ ffmpeg unavailable, skipping')
-    return True
 
 
 def test_split_audio_chunks():
@@ -303,7 +302,7 @@ def test_split_audio_chunks():
             capture_output=True, text=True, timeout=30)
         if r.returncode != 0:
             print('  ⚠ ffmpeg unavailable, skipping')
-            return True
+            return
         chunks, n = split_audio(str(wav), Path(td) / 'out', 4.0, 'chunk')
         assert n == 3, f'10s / 4s → 3 chunks, got {n}'
         assert len(chunks) == 3
@@ -323,13 +322,12 @@ def test_transcribe_chunked_single():
                    capture_output=True, text=True, timeout=30)
         if r.returncode != 0:
             print('  ⚠ ffmpeg unavailable, skipping')
-            return None
+            return
         from transcribe_whisper import get_audio_duration
         dur = get_audio_duration(str(wav))
         n = max(1, int(dur // (60 * 60)) + 1)
         assert n == 1
     print('  ✅ test_transcribe_chunked_single')
-    return None
 
 
 def run_all():
