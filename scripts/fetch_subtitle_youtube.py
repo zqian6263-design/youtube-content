@@ -16,12 +16,13 @@ Output (JSON to stdout):
   failed:  {"status":"failed","phase":"...","message":"..."}
 """
 
-import os, sys, json, re, subprocess, tempfile
+import sys
+import tempfile
 from pathlib import Path
 
 # Shared utilities (same directory as this script)
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from youtube_utils import extract_video_id, format_vtt, emit_json
+from youtube_utils import emit_json, extract_video_id, format_vtt
 
 
 def format_segments(segments, include_timestamps: bool = False) -> str:
@@ -39,7 +40,8 @@ def format_segments(segments, include_timestamps: bool = False) -> str:
     return '\n'.join(lines)
 
 
-def try_transcript_api(video_id: str, languages: list, timestamps: bool):
+def try_transcript_api(video_id: str, languages: list, timestamps: bool,
+                       second_lang: str = None):
     """Try fetching captions via youtube-transcript-api (v1.x compatible)."""
     try:
         from youtube_transcript_api import YouTubeTranscriptApi
@@ -48,26 +50,61 @@ def try_transcript_api(video_id: str, languages: list, timestamps: bool):
 
     try:
         api = YouTubeTranscriptApi()
-        result = api.fetch(video_id, languages=languages) if languages else api.fetch(video_id)
 
-        segments = []
-        for seg in result:
-            segments.append({
-                "text": seg.text if hasattr(seg, 'text') else str(seg),
-                "start": seg.start if hasattr(seg, 'start') else 0,
-                "duration": seg.duration if hasattr(seg, 'duration') else 0,
-            })
+        def fetch_lang(lang_code):
+            result = api.fetch(video_id, languages=[lang_code])
+            segments = []
+            for seg in result:
+                segments.append({
+                    "text": seg.text if hasattr(seg, 'text') else str(seg),
+                    "start": seg.start if hasattr(seg, 'start') else 0,
+                    "duration": seg.duration if hasattr(seg, 'duration') else 0,
+                })
+            return segments
 
-        if segments:
-            text = format_segments(segments, include_timestamps=timestamps)
-            return {
+        # Primary language
+        primary_segments = None
+        used_lang = None
+        for lang in languages:
+            try:
+                primary_segments = fetch_lang(lang)
+                used_lang = lang
+                break
+            except Exception:
+                continue
+
+        if not primary_segments:
+            # Try any available transcript
+            result = api.fetch(video_id)
+            primary_segments = [
+                {"text": seg.text if hasattr(seg, 'text') else str(seg),
+                 "start": seg.start if hasattr(seg, 'start') else 0,
+                 "duration": seg.duration if hasattr(seg, 'duration') else 0}
+                for seg in result
+            ]
+            used_lang = "unknown"
+
+        if primary_segments:
+            text = format_segments(primary_segments, include_timestamps=timestamps)
+            result = {
                 "status": "success",
                 "video_id": video_id,
-                "language": languages[0] if languages else "unknown",
+                "language": used_lang or (languages[0] if languages else "unknown"),
                 "subtitles": text,
-                "subtitle_count": len(segments),
+                "subtitle_count": len(primary_segments),
                 "is_auto_generated": False,
             }
+            # Bilingual: fetch secondary language too
+            if second_lang:
+                try:
+                    sec_segments = fetch_lang(second_lang)
+                    result["secondary_language"] = second_lang
+                    result["secondary_subtitles"] = format_segments(
+                        sec_segments, include_timestamps=timestamps)
+                    result["secondary_count"] = len(sec_segments)
+                except Exception:
+                    pass
+            return result
     except Exception as e:
         err = str(e)
         if 'blocked' in err.lower() or 'requestblocked' in err.lower() or 'ipblocked' in err.lower():
@@ -135,7 +172,7 @@ def try_ytdlp_subtitles(video_id: str, languages: list, timestamps: bool):
         if not sub_files:
             return None
 
-        with open(sub_files[0], 'r', encoding='utf-8', errors='replace') as f:
+        with open(sub_files[0], encoding='utf-8', errors='replace') as f:
             vtt_content = f.read()
 
         # Parse VTT preserving timestamps
@@ -164,6 +201,8 @@ def main():
     parser.add_argument('--video-id', required=True)
     parser.add_argument('--languages', default='zh-Hans,zh-Hant,en')
     parser.add_argument('--timestamps', action='store_true')
+    parser.add_argument('--second-language', default=None,
+                        help='Bilingual: also fetch this language as secondary')
     args = parser.parse_args()
 
     video_id = extract_video_id(args.video_id)
@@ -172,10 +211,11 @@ def main():
                    "message": f"Could not extract video ID from: {args.video_id}"},
                   exit_code=1)
 
-    languages = [l.strip() for l in args.languages.split(',') if l.strip()]
+    languages = [lg.strip() for lg in args.languages.split(',') if lg.strip()]
 
     # Strategy 1: youtube-transcript-api (fast)
-    result = try_transcript_api(video_id, languages, args.timestamps)
+    result = try_transcript_api(video_id, languages, args.timestamps,
+                                second_lang=args.second_language)
     if result:
         if result.get('status') == 'success':
             emit_json(result)

@@ -13,12 +13,16 @@ Output (JSON to stdout):
 Phases: extract, download, ffmpeg
 """
 
-import os, sys, json, re, subprocess, tempfile, shutil
+import json
+import shutil
+import subprocess
+import sys
+import tempfile
 from pathlib import Path
 
 # Shared utilities (same directory as this script)
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from youtube_utils import extract_video_id, emit_json
+from youtube_utils import emit_json, extract_video_id
 
 
 def main():

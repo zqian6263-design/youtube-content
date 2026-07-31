@@ -21,6 +21,9 @@ Thumbs.db
 # Env (keep .env.example, ignore actual .env)
 .env
 
+# Cache database
+cache.db
+
 # Temp audio files
 *.wav
 *.m4a

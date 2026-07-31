@@ -1,0 +1,62 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "youtube-content"
+version = "0.3.0"
+description = "Extract captions/subtitles and transcribe audio from YouTube videos. No API key needed."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "zqian6263-design" }]
+keywords = ["youtube", "subtitles", "transcript", "whisper", "ai", "caption"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Topic :: Multimedia :: Video",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+dependencies = [
+    "yt-dlp>=2024.0",
+    "youtube-transcript-api>=0.6",
+    "requests>=2.31",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+whisper = ["openai-whisper>=20231117"]
+faster = ["faster-whisper>=1.0"]
+dev = ["pytest>=7.0", "ruff>=0.4"]
+
+[project.scripts]
+youtube-content = "youtube_content.cli:main"
+
+[tool.setuptools]
+packages = ["youtube_content"]
+
+# Ship the original scripts inside the package so the CLI works after pip install
+[tool.setuptools.data-files]
+"youtube_content/scripts" = [
+    "scripts/analyze_youtube.py",
+    "scripts/fetch_subtitle_youtube.py",
+    "scripts/fetch_audio_youtube.py",
+    "scripts/fetch_playlist.py",
+    "scripts/transcribe_whisper.py",
+    "scripts/youtube_utils.py",
+    "scripts/cache.py",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP"]
+# E402: scripts must inject sys.path before importing shared modules
+ignore = ["E501", "E402"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

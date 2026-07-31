@@ -10,6 +10,8 @@ Modes:
   python analyze_youtube.py <URL> --whisper              # caption; if none, transcribe
   python analyze_youtube.py <URL> --auto                 # full auto: caption->whisper
   python analyze_youtube.py <URL> --force-whisper         # always transcribe from audio
+  python analyze_youtube.py <PLAYLIST_URL> --playlist     # batch process a playlist
+  python analyze_youtube.py <PLAYLIST_URL> --playlist --max 5   # first 5 videos
 
 Flags:
   --languages zh-Hans,en        Caption language priority (default: zh-Hans,zh-Hant,en)
@@ -17,12 +19,20 @@ Flags:
   --whisper-model small         Whisper model size
   --device auto                 torch device: auto/cuda/cpu (default: auto-detect)
   --timestamps                  Include MM:SS timestamps in output
+  --playlist                    Treat the URL as a playlist and batch process
+  --max N                       With --playlist: limit to N videos
+  --cookies PATH                With --playlist: cookies.txt for private playlists
 
 Env overrides:
   WHISPER_MODEL_DIR, WHISPER_TEMP, WHISPER_MODEL, WHISPER_DEVICE
 """
 
-import os, sys, json, re, subprocess
+import json
+import os
+import re
+import shlex
+import subprocess
+import sys
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -32,13 +42,23 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # Shared utilities
 sys.path.insert(0, str(SCRIPT_DIR))
-from youtube_utils import (
-    extract_video_id, safe_video_id, safe_filename, detect_device, load_env
-)
+from cache import Cache
+from youtube_utils import detect_device, extract_video_id, load_env, safe_filename, safe_video_id
 
 FETCH_SUB_PY = SCRIPT_DIR / 'fetch_subtitle_youtube.py'
 FETCH_AUDIO_PY = SCRIPT_DIR / 'fetch_audio_youtube.py'
+FETCH_PLAYLIST_PY = SCRIPT_DIR / 'fetch_playlist.py'
 WHISPER_PY = SCRIPT_DIR / 'transcribe_whisper.py'
+
+# Global cache instance (lazy-init on first use)
+_cache = None
+
+
+def get_cache() -> Cache:
+    global _cache
+    if _cache is None:
+        _cache = Cache()
+    return _cache
 
 
 def eprint(*args, **kwargs):
@@ -108,9 +128,34 @@ def fetch_video_title(video):
 # ── Whisper pipeline ────────────────────────────────────────────────────
 def run_whisper_pipeline(video_id, video_url, title, whisper_model, device,
                          whisper_model_dir, whisper_temp,
-                         whisper_language, timestamps):
+                         whisper_language, timestamps, backend='openai'):
     """Download audio and transcribe with Whisper."""
     safe_id = safe_video_id(video_url, fallback=video_id or 'video')
+
+    # Step 0: Check whisper transcript cache BEFORE downloading audio
+    # (most expensive step — worth caching; avoids network + disk entirely)
+    cache = get_cache()
+    cached = cache.get_transcript(safe_id, whisper_model, backend)
+    if cached and cached.get('status') == 'success':
+        eprint(f'📦 命中转写缓存: {safe_id}')
+        txt_path, meta_path = save_output(
+            safe_id, cached.get('title', title), cached.get('text', ''),
+            'whisper',
+            {'source': 'whisper', 'model': whisper_model, 'device': device,
+             'language': cached.get('language', 'auto'),
+             'duration_sec': cached.get('duration_sec', 0),
+             'cached': True}
+        )
+        return {
+            "status": "success",
+            "source": "whisper",
+            "title": cached.get('title', title),
+            "transcript_file": str(txt_path),
+            "metadata_file": str(meta_path),
+            "char_count": len(cached.get('text', '')),
+            "message": "Whisper 转写已完成（命中缓存）。",
+            "cached": True,
+        }
 
     # Step 1: Download audio
     eprint('🎧 Downloading audio...')
@@ -136,7 +181,7 @@ def run_whisper_pipeline(video_id, video_url, title, whisper_model, device,
 
     # Step 2: Transcribe with Whisper
     est_sec = max(10, duration // 30)
-    eprint(f'🎙 Transcribing with Whisper ({whisper_model}, {device}) ~{est_sec}s...')
+    eprint(f'🎙 Transcribing with Whisper ({whisper_model}, {device}, {backend}) ~{est_sec}s...')
 
     ts_flag = ['--timestamps'] if timestamps else []
     wo_kwargs = [
@@ -144,6 +189,7 @@ def run_whisper_pipeline(video_id, video_url, title, whisper_model, device,
         '--model', whisper_model,
         '--device', device,
         '--model-dir', str(whisper_model_dir),
+        '--backend', backend,
     ] + ts_flag
 
     if whisper_language:
@@ -174,6 +220,15 @@ def run_whisper_pipeline(video_id, video_url, title, whisper_model, device,
          'language': language, 'duration_sec': duration}
     )
 
+    # Cache the transcript so re-runs skip download + transcription
+    cache.set_transcript(safe_id, whisper_model, backend, {
+        "status": "success",
+        "text": transcript,
+        "language": language,
+        "duration_sec": duration,
+        "title": actual_title,
+    })
+
     return {
         "status": "success",
         "source": "whisper",
@@ -185,13 +240,243 @@ def run_whisper_pipeline(video_id, video_url, title, whisper_model, device,
     }
 
 
+# ── Single-video processing ─────────────────────────────────────────────
+def _interleave_captions(primary: str, secondary: str,
+                         primary_lang: str = '', secondary_lang: str = '') -> str:
+    """
+    Interleave two caption texts line by line, pairing by position.
+
+    Used for bilingual output (e.g. zh primary + en secondary).
+    Lines are grouped by timestamp when present, otherwise matched by index.
+    """
+    prim_lines = [ln for ln in primary.split('\n') if ln.strip()]
+    sec_lines = [ln for ln in secondary.split('\n') if ln.strip()]
+
+    # Match by timestamp prefix [MM:SS] when both have it
+    prim_ts = {}
+    for ln in prim_lines:
+        m = re.match(r'(\[\d{2}:\d{2}\])\s*(.*)', ln)
+        if m:
+            prim_ts.setdefault(m.group(1), []).append(m.group(2))
+    sec_ts = {}
+    for ln in sec_lines:
+        m = re.match(r'(\[\d{2}:\d{2}\])\s*(.*)', ln)
+        if m:
+            sec_ts.setdefault(m.group(1), []).append(m.group(2))
+
+    if prim_ts and sec_ts:
+        # Timestamp-aligned interleave
+        out = []
+        all_ts = sorted(set(prim_ts) | set(sec_ts))
+        for ts in all_ts:
+            p = ' '.join(prim_ts.get(ts, []))
+            s = ' '.join(sec_ts.get(ts, []))
+            if p:
+                out.append(f'{ts} {p}')
+            if s:
+                out.append(f'{ts} {s}')
+        return '\n'.join(out)
+
+    # Fallback: index-based interleave
+    out = []
+    max_len = max(len(prim_lines), len(sec_lines))
+    for i in range(max_len):
+        if i < len(prim_lines):
+            out.append(f'[{primary_lang}] {prim_lines[i]}')
+        if i < len(sec_lines):
+            out.append(f'[{secondary_lang}] {sec_lines[i]}')
+    return '\n'.join(out)
+
+
+def process_one_video(video, args, whisper_model, device,
+                      whisper_model_dir, whisper_temp):
+    """Process a single video; returns a JSON result dict."""
+    video_id = extract_video_id(video) or safe_video_id(video)
+
+    # Determine mode
+    mode = 'default'
+    if args.force_whisper:
+        mode = 'force_whisper'
+    elif args.auto:
+        mode = 'auto'
+    elif args.whisper:
+        mode = 'whisper'
+
+    # ── Step 1: Try subtitles (unless force-whisper) ────────────────────
+    if mode != 'force_whisper':
+        # Check cache first
+        cache = get_cache()
+        cached = cache.get_subtitles(video_id, args.languages, args.timestamps)
+        if cached:
+            eprint(f'📦 命中字幕缓存: {video_id}')
+            sub_result = cached
+        else:
+            eprint(f'📡 Checking captions for {video}...')
+            sub_args = ['--video-id', video, '--languages', args.languages]
+            if args.timestamps:
+                sub_args.append('--timestamps')
+            if args.bilingual:
+                # Secondary language = second entry in --languages (or 'en' fallback)
+                langs = [lg.strip() for lg in args.languages.split(',') if lg.strip()]
+                second = langs[1] if len(langs) > 1 else 'en'
+                sub_args += ['--second-language', second]
+
+            so, se, sc = run_script(FETCH_SUB_PY, *sub_args, timeout=90)
+
+            try:
+                sub_result = json.loads(so)
+            except json.JSONDecodeError:
+                sub_result = {"status": "failed", "phase": "parse",
+                              "message": f"Subtitle script output parse error: {so[:200]}"}
+
+            # Cache successful subtitle results
+            if sub_result.get('status') == 'success':
+                cache.set_subtitles(video_id, args.languages, args.timestamps, sub_result)
+
+        if sub_result.get('status') == 'success':
+            transcript = sub_result.get('subtitles', '')
+            title = sub_result.get('title') or fetch_video_title(video)
+
+            # Verify subtitles — if suspicious and in auto mode, fall back to Whisper
+            suspicious, reason = subtitle_looks_suspicious(transcript, title)
+            if suspicious:
+                eprint(f'⚠ 字幕检测异常: {reason}')
+                if mode in ('auto', 'whisper'):
+                    eprint('↪ 自动切换到 Whisper 转写...')
+                else:
+                    pass  # Default mode: still succeed with captions
+
+            if not (suspicious and mode in ('auto', 'whisper')):
+                # Bilingual: interleave primary + secondary captions
+                secondary = sub_result.get('secondary_subtitles')
+                if secondary:
+                    transcript = _interleave_captions(
+                        transcript, secondary,
+                        sub_result.get('language', ''),
+                        sub_result.get('secondary_language', '')
+                    )
+
+                txt_path, meta_path = save_output(
+                    video_id, title, transcript, 'caption',
+                    {'source': 'caption', 'language': sub_result.get('language', ''),
+                     'is_auto_generated': sub_result.get('is_auto_generated', False),
+                     'subtitle_count': sub_result.get('subtitle_count', 0)}
+                )
+
+                eprint(f'✅ 字幕已提取 ({sub_result.get("subtitle_count", 0)} 条)')
+                return {
+                    "status": "success",
+                    "source": "caption",
+                    "title": title,
+                    "transcript_file": str(txt_path),
+                    "metadata_file": str(meta_path),
+                    "char_count": len(transcript),
+                    "message": "字幕已提取，请总结。",
+                }
+            # else: fall through to Whisper pipeline
+
+        # Subtitle fetch failed — handle the failure
+        phase = sub_result.get('phase', '')
+        if phase == 'no_captions' or sub_result.get('status') == 'success':
+            if phase == 'no_captions':
+                eprint('📭 视频无字幕可用')
+            if mode == 'default':
+                next_cmd = f'--whisper {shlex.quote(video)}'
+                if args.languages:
+                    next_cmd += f' --languages {shlex.quote(args.languages)}'
+                if args.timestamps:
+                    next_cmd += ' --timestamps'
+                return {
+                    "status": "needs_confirmation",
+                    "message": "此视频无可用字幕。是否用 Whisper 自动转写音频？",
+                    "video_id": video_id,
+                    "next_command": next_cmd,
+                    "next_flags": ["--whisper"]
+                }
+            # whisper/auto modes: fall through to Whisper
+        else:
+            # API/network error — do NOT suggest Whisper
+            return {
+                "status": "failed",
+                "phase": phase,
+                "message": sub_result.get('message', '字幕提取失败'),
+                "detail": sub_result.get('message', '')
+            }
+
+    # ── Step 2: Whisper transcription ───────────────────────────────────
+    eprint('🎤 切换到 Whisper 音频转写模式...')
+
+    whisper_language = args.whisper_language
+    if not whisper_language:
+        langs = [lg.strip() for lg in args.languages.split(',')]
+        whisper_language = langs[0][:2] if langs else 'auto'
+
+    return run_whisper_pipeline(
+        video_id, video, video_id, whisper_model, device,
+        whisper_model_dir, whisper_temp,
+        whisper_language, args.timestamps, args.backend
+    )
+
+
+# ── Playlist processing ─────────────────────────────────────────────────
+def process_playlist(playlist_url, args, whisper_model, device,
+                     whisper_model_dir, whisper_temp):
+    """Fetch playlist video list and process each video sequentially."""
+    eprint(f'📋 播放列表模式: {playlist_url}')
+
+    pl_args = ['--url', playlist_url]
+    if args.max:
+        pl_args += ['--max', str(args.max)]
+    if args.cookies:
+        pl_args += ['--cookies', args.cookies]
+
+    po, pe, pc = run_script(FETCH_PLAYLIST_PY, *pl_args, timeout=120)
+
+    try:
+        pl_result = json.loads(po)
+    except json.JSONDecodeError:
+        return {"status": "failed", "phase": "playlist_parse",
+                "message": f"播放列表解析失败: {po[:200]}"}
+
+    if pl_result.get('status') != 'success':
+        return pl_result
+
+    videos = pl_result.get('videos', [])
+    eprint(f'📋 播放列表包含 {len(videos)} 个视频')
+
+    results = []
+    for i, v in enumerate(videos, 1):
+        vid = v['id']
+        title = v.get('title', '')
+        eprint(f'\n[{i}/{len(videos)}] {vid} — {title}')
+        result = process_one_video(
+            vid, args, whisper_model, device,
+            whisper_model_dir, whisper_temp
+        )
+        result['index'] = i
+        result['video_id'] = vid
+        results.append(result)
+
+    success_count = sum(1 for r in results if r.get('status') == 'success')
+    eprint(f'\n📋 播放列表处理完成: {success_count}/{len(results)} 成功')
+
+    return {
+        "status": "success",
+        "source": "playlist",
+        "playlist_title": pl_result.get('playlist_title', ''),
+        "total": len(results),
+        "success_count": success_count,
+        "results": results,
+    }
+
+
 # ── Entry point ─────────────────────────────────────────────────────────
 def main():
     import argparse
 
     parser = argparse.ArgumentParser(
         description='Analyze YouTube video content')
-    parser.add_argument('video', help='YouTube URL or video ID')
+    parser.add_argument('video', help='YouTube URL, video ID, or playlist URL')
     parser.add_argument('--whisper', action='store_true',
                         help='Use subtitles; if none, transcribe without asking')
     parser.add_argument('--auto', action='store_true',
@@ -207,6 +492,17 @@ def main():
                         help='torch device: auto (default), cuda, cpu')
     parser.add_argument('--timestamps', action='store_true',
                         help='Include timestamps in output')
+    parser.add_argument('--playlist', action='store_true',
+                        help='Treat URL as playlist and batch process')
+    parser.add_argument('--max', type=int, default=None,
+                        help='With --playlist: limit to N videos')
+    parser.add_argument('--cookies', default=None,
+                        help='With --playlist: path to cookies.txt')
+    parser.add_argument('--backend', default='openai',
+                        choices=['openai', 'faster-whisper'],
+                        help='Whisper backend: openai (default) or faster-whisper (4x faster)')
+    parser.add_argument('--bilingual', action='store_true',
+                        help='Bilingual output: interleave primary + secondary captions')
     args = parser.parse_args()
 
     # Load .env if present (does not override existing env vars)
@@ -214,121 +510,30 @@ def main():
 
     # ── Configuration from env ──────────────────────────────────────────
     whisper_model = args.whisper_model or os.environ.get('WHISPER_MODEL', 'small')
-    # device=auto by default: use GPU if available, else CPU
     device = detect_device(args.device or os.environ.get('WHISPER_DEVICE', 'auto'))
     if device == 'cpu' and (args.device or os.environ.get('WHISPER_DEVICE')) in (None, 'auto', ''):
-        eprint(f'ℹ 未检测到 GPU，使用 CPU 转写（可加 --device cuda 强制）')
+        eprint('ℹ 未检测到 GPU，使用 CPU 转写（可加 --device cuda 强制）')
 
     whisper_model_dir = Path(os.environ.get(
         'WHISPER_MODEL_DIR', str(Path.home() / '.hermes' / 'whisper' / 'models')))
     whisper_temp = Path(os.environ.get(
         'WHISPER_TEMP', str(Path.home() / '.hermes' / 'whisper' / 'temp')))
 
-    # Determine mode
-    mode = 'default'
-    if args.force_whisper:
-        mode = 'force_whisper'
-    elif args.auto:
-        mode = 'auto'
-    elif args.whisper:
-        mode = 'whisper'
-
     video = args.video.strip()
-    video_id = extract_video_id(video) or safe_video_id(video)
 
-    # ── Step 1: Try subtitles (unless force-whisper) ────────────────────
-    if mode != 'force_whisper':
-        eprint(f'📡 Checking captions for {video}...')
-        sub_args = ['--video-id', video, '--languages', args.languages]
-        if args.timestamps:
-            sub_args.append('--timestamps')
+    # ── Playlist mode ────────────────────────────────────────────────────
+    if args.playlist or ('list=' in video and '/watch' in video):
+        result = process_playlist(video, args, whisper_model, device,
+                                  whisper_model_dir, whisper_temp)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        if result.get('status') != 'success':
+            sys.exit(1)
+        return
 
-        so, se, sc = run_script(FETCH_SUB_PY, *sub_args, timeout=90)
-
-        try:
-            sub_result = json.loads(so)
-        except json.JSONDecodeError:
-            sub_result = {"status": "failed", "phase": "parse",
-                          "message": f"Subtitle script output parse error: {so[:200]}"}
-
-        if sub_result.get('status') == 'success':
-            transcript = sub_result.get('subtitles', '')
-            title = sub_result.get('title') or fetch_video_title(video)
-
-            # Verify subtitles — if suspicious and in auto mode, fall back to Whisper
-            suspicious, reason = subtitle_looks_suspicious(transcript, title)
-            if suspicious:
-                eprint(f'⚠ 字幕检测异常: {reason}')
-                if mode in ('auto', 'whisper'):
-                    eprint(f'↪ 自动切换到 Whisper 转写...')
-                else:
-                    # Default mode: still succeed with the captions but note the issue
-                    pass
-
-            if not (suspicious and mode in ('auto', 'whisper')):
-                txt_path, meta_path = save_output(
-                    video_id, title, transcript, 'caption',
-                    {'source': 'caption', 'language': sub_result.get('language', ''),
-                     'is_auto_generated': sub_result.get('is_auto_generated', False),
-                     'subtitle_count': sub_result.get('subtitle_count', 0)}
-                )
-
-                eprint(f'✅ 字幕已提取 ({sub_result.get("subtitle_count", 0)} 条)')
-                print(json.dumps({
-                    "status": "success",
-                    "source": "caption",
-                    "title": title,
-                    "transcript_file": str(txt_path),
-                    "metadata_file": str(meta_path),
-                    "char_count": len(transcript),
-                    "message": "字幕已提取，请总结。",
-                }, ensure_ascii=False))
-                return
-            # else: fall through to Whisper pipeline
-
-        # Subtitle fetch failed — handle the failure
-        phase = sub_result.get('phase', '')
-        if phase == 'no_captions' or sub_result.get('status') == 'success':
-            if phase == 'no_captions':
-                eprint('📭 视频无字幕可用')
-            if mode == 'default':
-                import shlex
-                next_cmd = f'--whisper {shlex.quote(video)}'
-                if args.languages:
-                    next_cmd += f' --languages {shlex.quote(args.languages)}'
-                if args.timestamps:
-                    next_cmd += ' --timestamps'
-                print(json.dumps({
-                    "status": "needs_confirmation",
-                    "message": "此视频无可用字幕。是否用 Whisper 自动转写音频？",
-                    "video_id": video_id,
-                    "next_command": next_cmd,
-                    "next_flags": ["--whisper"]
-                }, ensure_ascii=False))
-                return
-            # whisper/auto modes: fall through to Whisper
-        else:
-            # API/network error — do NOT suggest Whisper (root cause isn't missing captions)
-            print(json.dumps({
-                "status": "failed",
-                "phase": phase,
-                "message": sub_result.get('message', '字幕提取失败'),
-                "detail": sub_result.get('message', '')
-            }))
-            return
-
-    # ── Step 2: Whisper transcription ───────────────────────────────────
-    eprint('🎤 切换到 Whisper 音频转写模式...')
-
-    whisper_language = args.whisper_language
-    if not whisper_language:
-        langs = [l.strip() for l in args.languages.split(',')]
-        whisper_language = langs[0][:2] if langs else 'auto'
-
-    result = run_whisper_pipeline(
-        video_id, video, video_id, whisper_model, device,
-        whisper_model_dir, whisper_temp,
-        whisper_language, args.timestamps
+    # ── Single video mode ───────────────────────────────────────────────
+    result = process_one_video(
+        video, args, whisper_model, device,
+        whisper_model_dir, whisper_temp
     )
 
     print(json.dumps(result, ensure_ascii=False))

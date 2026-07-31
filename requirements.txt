@@ -4,5 +4,9 @@ openai-whisper>=20231117
 requests>=2.31
 python-dotenv>=1.0
 
+# Optional: 4x faster transcription (CTranslate2 backend)
+# faster-whisper>=1.0
+
 # Dev
 pytest>=7.0
+ruff>=0.4

@@ -8,7 +8,6 @@ Or:        python tests/test_youtube_utils.py   (no pytest needed)
 
 import os
 import sys
-import json
 import tempfile
 from pathlib import Path
 
@@ -17,14 +16,12 @@ SCRIPTS_DIR = Path(__file__).resolve().parent.parent / 'scripts'
 sys.path.insert(0, str(SCRIPTS_DIR))
 
 from youtube_utils import (
-    extract_video_id,
-    safe_video_id,
-    safe_filename,
     detect_device,
+    extract_video_id,
     format_vtt,
-    load_env,
+    safe_filename,
+    safe_video_id,
 )
-
 
 # ── extract_video_id ────────────────────────────────────────────────────
 
@@ -158,8 +155,6 @@ def test_load_env():
 # ── Subtitle verification (in analyze script) ──────────────────────────
 
 def test_subtitle_suspicion():
-    # Import from analyze_youtube
-    sys.path.insert(0, str(SCRIPTS_DIR))
     import importlib
     analyze = importlib.import_module('analyze_youtube')
 
@@ -180,6 +175,101 @@ def test_subtitle_suspicion():
     print('  ✅ test_subtitle_suspicion')
 
 
+# ── Cache layer ─────────────────────────────────────────────────────────
+
+def test_cache_subtitles_roundtrip():
+    from cache import Cache
+    with tempfile.TemporaryDirectory() as tmp:
+        c = Cache(db_path=Path(tmp) / 'test.db')
+        try:
+            # Miss first
+            assert c.get_subtitles('abc123def45', 'zh-Hans,en', False) is None
+            # Set then hit
+            c.set_subtitles('abc123def45', 'zh-Hans,en', False, {
+                "status": "success", "subtitles": "hello world", "subtitle_count": 1
+            })
+            got = c.get_subtitles('abc123def45', 'zh-Hans,en', False)
+            assert got is not None and got.get('subtitles') == 'hello world'
+            # Different params → different key → miss
+            assert c.get_subtitles('abc123def45', 'zh-Hans,en', True) is None
+            assert c.get_subtitles('abc123def45', 'en', False) is None
+        finally:
+            c.close()
+    print('  ✅ test_cache_subtitles_roundtrip')
+
+
+def test_cache_transcript_roundtrip():
+    from cache import Cache
+    with tempfile.TemporaryDirectory() as tmp:
+        c = Cache(db_path=Path(tmp) / 'test.db')
+        try:
+            assert c.get_transcript('abc123def45', 'small', 'openai') is None
+            c.set_transcript('abc123def45', 'small', 'openai', {
+                "status": "success", "text": "transcribed text", "language": "en"
+            })
+            got = c.get_transcript('abc123def45', 'small', 'openai')
+            assert got is not None and got.get('text') == 'transcribed text'
+            # Different model → miss
+            assert c.get_transcript('abc123def45', 'base', 'openai') is None
+            # Different backend → miss
+            assert c.get_transcript('abc123def45', 'small', 'faster-whisper') is None
+        finally:
+            c.close()
+    print('  ✅ test_cache_transcript_roundtrip')
+
+
+def test_cache_ttl_expiry():
+    from cache import Cache
+    with tempfile.TemporaryDirectory() as tmp:
+        c = Cache(db_path=Path(tmp) / 'test.db', ttl=0)  # 0s TTL = always expired
+        try:
+            c.set_subtitles('abc123def45', 'zh-Hans', False, {"status": "success"})
+            assert c.get_subtitles('abc123def45', 'zh-Hans', False) is None  # expired
+            stats = c.stats()
+            assert stats['total'] == 0  # expired entry deleted on access
+        finally:
+            c.close()
+    print('  ✅ test_cache_ttl_expiry')
+
+
+# ── Bilingual interleave (in analyze script) ────────────────────────────
+
+def test_interleave_timestamp_aligned():
+    import importlib
+    analyze = importlib.import_module('analyze_youtube')
+    primary = '[00:01] Hello\n[00:05] World'
+    secondary = '[00:01] 你好\n[00:05] 世界'
+    out = analyze._interleave_captions(primary, secondary, 'en', 'zh')
+    lines = out.split('\n')
+    assert lines[0] == '[00:01] Hello'
+    assert lines[1] == '[00:01] 你好'
+    assert lines[2] == '[00:05] World'
+    assert lines[3] == '[00:05] 世界'
+    print('  ✅ test_interleave_timestamp_aligned')
+
+
+def test_interleave_fallback_index():
+    import importlib
+    analyze = importlib.import_module('analyze_youtube')
+    # No timestamps → index-based with language tags
+    out = analyze._interleave_captions('line1\nline2', 'L1', 'en', 'zh')
+    lines = out.split('\n')
+    assert lines[0] == '[en] line1'
+    assert lines[1] == '[zh] L1'
+    assert lines[2] == '[en] line2'
+    print('  ✅ test_interleave_fallback_index')
+
+
+def test_playlist_id_extraction():
+    import importlib
+    importlib.import_module('fetch_playlist')
+    from fetch_playlist import extract_playlist_id
+    assert extract_playlist_id('https://www.youtube.com/playlist?list=PLabc123') == 'PLabc123'
+    assert extract_playlist_id('https://www.youtube.com/watch?v=abc&list=WL&index=2') == 'WL'
+    assert extract_playlist_id('no playlist here') is None
+    print('  ✅ test_playlist_id_extraction')
+
+
 def run_all():
     tests = [
         test_extract_video_id_formats,
@@ -193,6 +283,12 @@ def run_all():
         test_detect_device_auto,
         test_load_env,
         test_subtitle_suspicion,
+        test_cache_subtitles_roundtrip,
+        test_cache_transcript_roundtrip,
+        test_cache_ttl_expiry,
+        test_interleave_timestamp_aligned,
+        test_interleave_fallback_index,
+        test_playlist_id_extraction,
     ]
     failures = 0
     for t in tests:

@@ -10,10 +10,10 @@ Centralizes logic that used to be duplicated across scripts:
   - JSON stdout output helper
 """
 
+import json
 import os
 import re
 import sys
-import json
 from pathlib import Path
 
 # ── YouTube ID extraction ───────────────────────────────────────────────
@@ -79,7 +79,7 @@ def load_env():
 def _manual_load(path: Path):
     """Minimal .env parser without python-dotenv."""
     try:
-        with open(path, 'r', encoding='utf-8') as f:
+        with open(path, encoding='utf-8') as f:
             for line in f:
                 line = line.strip()
                 if not line or line.startswith('#') or '=' not in line:

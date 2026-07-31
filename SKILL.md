@@ -75,12 +75,14 @@ any authentication. Captions are fetched via YouTube's public endpoints.
 
 | Script | Role |
 |--------|------|
-| `analyze_youtube.py` | **Single entry point.** Modes: default (ask), `--whisper`, `--auto`, `--force-whisper`. Also `--timestamps`, `--languages`, `--whisper-language`, `--device auto`. |
-| `fetch_subtitle_youtube.py` | Extract captions via youtube-transcript-api + yt-dlp fallback. |
+| `analyze_youtube.py` | **Single entry point.** Modes: default (ask), `--whisper`, `--auto`, `--force-whisper`, `--playlist`. Also `--timestamps`, `--languages`, `--bilingual`, `--whisper-language`, `--device auto`, `--backend`. |
+| `fetch_subtitle_youtube.py` | Extract captions via youtube-transcript-api + yt-dlp fallback. Supports bilingual (`--second-language`). |
 | `fetch_audio_youtube.py` | Download audio stream via yt-dlp, convert to WAV. |
-| `transcribe_whisper.py` | Transcribe downloaded audio with Whisper. |
+| `fetch_playlist.py` | List playlist video IDs (for `--playlist` batch mode). |
+| `transcribe_whisper.py` | Transcribe with Whisper. Backends: `openai`, `faster-whisper`. |
 | `youtube_utils.py` | Shared utilities: ID parsing, .env loading, VTT parsing, GPU detection. |
-| `tests/test_youtube_utils.py` | Unit tests. Run: `python tests/test_youtube_utils.py` |
+| `cache.py` | SQLite cache (subtitles + transcripts, 7-day TTL). |
+| `tests/test_youtube_utils.py` | 17 unit tests. Run: `python tests/test_youtube_utils.py` |
 
 ## Usage Strategy
 
@@ -143,9 +145,24 @@ python SKILL_DIR/scripts/analyze_youtube.py "URL" --force-whisper --device auto
 # Full auto with custom model
 python SKILL_DIR/scripts/analyze_youtube.py "URL" --auto --whisper-model base --device auto
 
+# faster-whisper backend (~4x faster): pip install faster-whisper
+python SKILL_DIR/scripts/analyze_youtube.py "URL" --auto --backend faster-whisper
+
+# Bilingual output (zh primary + en secondary, timestamp-aligned)
+python SKILL_DIR/scripts/analyze_youtube.py "URL" --languages zh-Hans,en --bilingual --timestamps
+
+# Batch process a playlist (first 5 videos)
+python SKILL_DIR/scripts/analyze_youtube.py "PLAYLIST_URL" --playlist --max 5
+
+# Private playlist (e.g. Watch Later) needs cookies.txt
+python SKILL_DIR/scripts/analyze_youtube.py "PLAYLIST_URL" --playlist --cookies cookies.txt
+
 # Run tests
 python SKILL_DIR/tests/test_youtube_utils.py
 ```
+
+> **缓存**: 字幕和 Whisper 转写结果自动缓存在 `cache.db`（7 天 TTL）。
+> 重复分析同一视频会秒回，跳过网络请求和转写。
 
 Output files are saved to `SKILL_DIR/output/`:
 - `{video_id}_{title}.txt` — transcript
