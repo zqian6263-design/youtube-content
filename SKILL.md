@@ -87,6 +87,7 @@ any authentication. Captions are fetched via YouTube's public endpoints.
 | `webui.py` | Flask web UI: extract/transcribe + knowledge base page `/kb` (search, RAG ask, notes). |
 | `search.py` | Full-text search (FTS5 + CJK bigram), vector semantic search (`--vector`), and `--ask` RAG Q&A. |
 | `feishu_bot.py` | Feishu bot: send a YouTube link → get caption/transcript reply (needs app credentials). |
+| `bilibili_bridge.py` | Bilibili adapter: CC subtitles (skill cookies) + yt-dlp audio → Whisper. |
 | `pipeline.py` | One-command pipeline: watch → extract → enhance → archive → reindex → report. |
 | `fetch_audio_youtube.py` | Download audio stream via yt-dlp, convert to WAV. Supports `--start-sec/--end-sec`, cookies, auto-retry, bot/age detection. |
 | `youtube_utils.py` | Shared utilities: ID parsing, .env loading, VTT parsing, GPU detection. |
@@ -197,6 +198,12 @@ python SKILL_DIR/scripts/watch_channel.py --config watch_config.json --weekly
 # One-command knowledge-base pipeline (watch → extract → enhance → archive → reindex)
 python SKILL_DIR/scripts/pipeline.py --config watch_config.json \
     --archive "C:/Users/me/Obsidian/视频笔记" --chapters --translate --reindex
+
+# Bilibili support (auto-detected: BV号 or bilibili.com URL)
+# CC subtitles via bilibili-content skill cookies; Whisper fallback:
+python SKILL_DIR/scripts/analyze_youtube.py "BV1xx411c7mD"            # captions or guidance
+python SKILL_DIR/scripts/analyze_youtube.py "BV1xx411c7mD" --whisper  # transcribe audio
+python SKILL_DIR/scripts/analyze_youtube.py "https://www.bilibili.com/video/BV1xx" --chapters --archive DIR
 
 # Web UI (needs: pip install flask)
 python SKILL_DIR/scripts/webui.py --port 8080   # → http://127.0.0.1:8080

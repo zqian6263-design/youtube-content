@@ -883,6 +883,67 @@ def process_one_video(video, args, whisper_model, device,
 
 
 # ── Playlist processing ─────────────────────────────────────────────────
+def process_bilibili(video: str, args) -> dict:
+    """Handle Bilibili videos via the bridge adapter.
+
+    Bridges to scripts/bilibili_bridge.py which produces the same JSON
+    shape as the YouTube path; then applies chapters/translate/archive
+    enhancements on the transcript.
+    """
+    from youtube_utils import load_env
+    load_env()
+
+    bridge_py = SCRIPT_DIR / 'bilibili_bridge.py'
+    extra = []
+    if getattr(args, 'whisper', False):
+        extra.append('--whisper')
+    if getattr(args, 'force_whisper', False):
+        extra.append('--force-whisper')
+    if getattr(args, 'timestamps', False):
+        extra.append('--timestamps')
+
+    so, se, sc = run_script(bridge_py, video, *extra, timeout=3600)
+    try:
+        idx = so.find('{')
+        result = json.loads(so[idx:]) if idx >= 0 else {"status": "failed",
+                                                        "message": so[:200]}
+    except json.JSONDecodeError:
+        result = {"status": "failed", "message": f"bridge 输出解析失败: {so[:200]}"}
+
+    if result.get('status') != 'success':
+        return result
+
+    # Enhancements on the transcript
+    transcript = result.get('transcript', '')
+    bvid = result.get('video_id', video)
+    title = result.get('title') or bvid
+
+    if getattr(args, 'chapters', False) and transcript:
+        chapters, ch_path = generate_chapters(
+            transcript, bvid, title,
+            window_sec=args.chapter_window_sec,
+            min_chapters=args.chapter_min,
+            max_chapters=args.chapter_max,
+            top_words=args.chapter_top_words,
+            llm_titles=getattr(args, 'llm_titles', False), args=args,
+        )
+        if chapters:
+            result['chapters'] = chapters
+            result['chapters_file'] = ch_path
+
+    if getattr(args, 'translate', False) and transcript:
+        tr_path, tr_text = translate_transcript(
+            transcript, bvid, title, args=args)
+        result['translated_file'] = tr_path
+
+    if getattr(args, 'archive', None) and transcript:
+        note_path = archive_note(bvid, title, transcript, result,
+                                 args.archive)
+        result['archive_file'] = note_path
+
+    return result
+
+
 def process_playlist(playlist_url, args, whisper_model, device,
                      whisper_model_dir, whisper_temp):
     """Fetch playlist video list and process each video sequentially."""
@@ -1049,6 +1110,15 @@ def main():
         'WHISPER_TEMP', str(Path.home() / '.hermes' / 'whisper' / 'temp')))
 
     video = args.video.strip()
+
+    # ── Bilibili mode ────────────────────────────────────────────────────
+    import re as _bili_re
+    if _bili_re.search(r'BV[a-zA-Z0-9]+', video) or 'bilibili.com' in video:
+        result = process_bilibili(video, args)
+        print(json.dumps(result, ensure_ascii=False))
+        if result.get('status') != 'success':
+            sys.exit(1)
+        return
 
     # ── Playlist mode ────────────────────────────────────────────────────
     if args.playlist or ('list=' in video and '/watch' in video):

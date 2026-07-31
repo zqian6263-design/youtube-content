@@ -1107,6 +1107,26 @@ def test_clean_transcript_text():
     print('  ✅ test_clean_transcript_text')
 
 
+def test_bilibili_extract_bvid():
+    import bilibili_bridge as bb
+    assert bb.extract_bvid('BV1BU3F6fELc') == 'BV1BU3F6fELc'
+    assert bb.extract_bvid('https://www.bilibili.com/video/BV1xx411c7mD') == 'BV1xx411c7mD'
+    assert bb.extract_bvid('https://b23.tv/BV1BU3F6fELc?share') == 'BV1BU3F6fELc'
+    assert bb.extract_bvid('not a bv id') is None
+    print('  ✅ test_bilibili_extract_bvid')
+
+
+def test_analyze_detect_bilibili():
+    """analyze routes bilibili URLs/BVs to the bridge."""
+    import re
+    assert re.search(r'BV[a-zA-Z0-9]+', 'BV1BU3F6fELc')
+    assert re.search(r'BV[a-zA-Z0-9]+', 'https://www.bilibili.com/video/BV1xx')
+    assert 'bilibili.com' in 'https://www.bilibili.com/video/BV1xx'
+    # YouTube IDs must NOT match
+    assert not re.search(r'BV[a-zA-Z0-9]+', 'dQw4w9WgXcQ')
+    print('  ✅ test_analyze_detect_bilibili')
+
+
 def test_detect_chapters_full_pipeline():
     from chapters import detect_chapters, parse_subtitles
     # Simulate a 10-min video with 3 distinct topics
@@ -1201,6 +1221,8 @@ def run_all():
         test_video_jump_url,
         test_pipeline_list_playlist_videos_mock,
         test_clean_transcript_text,
+        test_bilibili_extract_bvid,
+        test_analyze_detect_bilibili,
     ]
     failures = 0
     for t in tests:
