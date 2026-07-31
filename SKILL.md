@@ -84,7 +84,7 @@ any authentication. Captions are fetched via YouTube's public endpoints.
 | `convert_subtitles.py` | Convert segments to SRT / VTT / LRC / TXT (players, editors, lyrics). |
 | `translate.py` | LLM subtitle translation (OpenAI-compatible API: DeepSeek/OpenAI). |
 | `watch_channel.py` | Watch channel/playlist for new videos → Markdown report (cron-friendly). |
-| `webui.py` | Flask web UI: paste URL → extract/transcribe → view + download (needs flask). |
+| `webui.py` | Flask web UI: extract/transcribe + knowledge base page `/kb` (search, RAG ask, notes). |
 | `search.py` | Full-text search (FTS5 + CJK bigram), vector semantic search (`--vector`), and `--ask` RAG Q&A. |
 | `feishu_bot.py` | Feishu bot: send a YouTube link → get caption/transcript reply (needs app credentials). |
 | `pipeline.py` | One-command pipeline: watch → extract → enhance → archive → reindex → report. |
@@ -200,6 +200,8 @@ python SKILL_DIR/scripts/pipeline.py --config watch_config.json \
 
 # Web UI (needs: pip install flask)
 python SKILL_DIR/scripts/webui.py --port 8080   # → http://127.0.0.1:8080
+# Knowledge base page (search / RAG ask / notes browser)
+# → http://127.0.0.1:8080/kb
 
 # Browser extension (Chrome/Edge): load unpacked extension/ folder
 # 1. python scripts/webui.py

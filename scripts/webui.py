@@ -212,6 +212,146 @@ def index():
     return render_template_string(HTML)
 
 
+KB_HTML = '''<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>📚 知识库</title>
+<style>
+  body { font-family: -apple-system, "Microsoft YaHei", sans-serif; max-width: 900px;
+         margin: 0 auto; padding: 20px; color: #24292f; }
+  h1 { font-size: 22px; }
+  .tabs { display: flex; gap: 8px; margin: 16px 0; }
+  .tab { padding: 8px 18px; border: 1px solid #d0d7de; border-radius: 8px;
+         cursor: pointer; background: #f6f8fa; font-size: 14px; }
+  .tab.active { background: #1f6feb; color: #fff; border-color: #1f6feb; }
+  .panel { display: none; }
+  .panel.active { display: block; }
+  input[type=text] { width: calc(100% - 110px); padding: 9px; border: 1px solid #d0d7de;
+                     border-radius: 6px; font-size: 14px; }
+  button { padding: 9px 18px; background: #1f6feb; color: #fff; border: none;
+           border-radius: 6px; font-size: 14px; cursor: pointer; margin-left: 6px; }
+  button:hover { background: #1857c1; }
+  .result { margin-top: 14px; }
+  .item { border: 1px solid #d0d7de; border-radius: 8px; padding: 10px 14px;
+          margin-bottom: 8px; font-size: 13px; }
+  .item .meta { color: #57606a; font-size: 12px; margin-bottom: 4px; }
+  .item a { color: #1f6feb; text-decoration: none; }
+  .item pre { white-space: pre-wrap; word-break: break-word; margin: 4px 0;
+              font-family: inherit; font-size: 13px; }
+  .err { color: #cf222e; }
+  .small { color: #57606a; font-size: 12px; }
+</style>
+</head>
+<body>
+<h1>📚 视频知识库</h1>
+<div class="tabs">
+  <div class="tab active" data-tab="search">🔍 搜索</div>
+  <div class="tab" data-tab="ask">❓ 问答</div>
+  <div class="tab" data-tab="notes">📄 笔记</div>
+</div>
+
+<div id="p-search" class="panel active">
+  <input type="text" id="sq" placeholder="输入关键词（中文/英文）...">
+  <button onclick="doSearch()">搜索</button>
+  <label class="small"><input type="checkbox" id="svec"> 语义搜索（慢）</label>
+  <div id="sres" class="result"></div>
+</div>
+
+<div id="p-ask" class="panel">
+  <input type="text" id="aq" placeholder="输入问题，如：CS50 里 A* 和贪心搜索的区别？">
+  <button onclick="doAsk()">提问</button>
+  <label class="small"><input type="checkbox" id="avec"> 语义检索</label>
+  <div id="ares" class="result"></div>
+</div>
+
+<div id="p-notes" class="panel">
+  <div class="small">归档目录: <span id="notes-dir"></span></div>
+  <div id="nres" class="result"></div>
+</div>
+
+<script>
+document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => {
+  document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
+  document.querySelectorAll('.panel').forEach(x => x.classList.remove('active'));
+  t.classList.add('active');
+  document.getElementById('p-' + t.dataset.tab).classList.add('active');
+  if (t.dataset.tab === 'notes') loadNotes();
+}));
+
+function esc(s) { return String(s||'').replace(/[&<>"']/g, c => ({
+  '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+async function doSearch() {
+  const q = document.getElementById('sq').value.trim();
+  const mode = document.getElementById('svec').checked ? 'vector' : 'fts';
+  const el = document.getElementById('sres');
+  if (!q) return;
+  el.innerHTML = '⏳ 搜索中...';
+  try {
+    const r = await fetch('/api/search?q=' + encodeURIComponent(q) +
+      '&mode=' + mode + '&limit=10');
+    const d = await r.json();
+    if (d.status !== 'success' || !d.matches || !d.matches.length) {
+      el.innerHTML = '<div class="err">未找到匹配（' + esc(d.message||'') + '）</div>';
+      return;
+    }
+    el.innerHTML = '<div class="small">找到 ' + d.count + ' 个匹配</div>' + d.matches.map(m => {
+      const j = m.jump_url ? ' · <a href="' + esc(m.jump_url) + '" target="_blank">⏩ 跳转</a>' : '';
+      return '<div class="item"><div class="meta">[' + esc(m.start_ts||'--:--') + '] ' +
+        esc(m.path.split(/[\\\\\\/]/).pop()) + ' · 得分 ' + (m.score||'') + j + '</div>' +
+        '<pre>' + esc(m.text) + '</pre></div>';
+    }).join('');
+  } catch (e) { el.innerHTML = '<div class="err">❌ ' + esc(e) + '</div>'; }
+}
+
+async function doAsk() {
+  const q = document.getElementById('aq').value.trim();
+  const mode = document.getElementById('avec').checked ? 'vector' : 'fts';
+  const el = document.getElementById('ares');
+  if (!q) return;
+  el.innerHTML = '⏳ 思考中（DeepSeek 回答，约 10-30 秒）...';
+  try {
+    const r = await fetch('/api/ask', { method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({question: q, mode: mode}) });
+    const d = await r.json();
+    if (d.status !== 'success') { el.innerHTML = '<div class="err">❌ ' + esc(d.message||'') + '</div>'; return; }
+    let html = '<div class="item"><pre>' + esc(d.answer) + '</pre></div>';
+    if (d.references && d.references.length) {
+      html += '<div class="small">📎 参考片段:</div>' + d.references.map(ref => {
+        const j = ref.jump_url ? ' · <a href="' + esc(ref.jump_url) + '" target="_blank">⏩ 跳转</a>' : '';
+        return '<div class="item"><div class="meta">[' + esc(ref.start_ts||'') + '] ' +
+          esc(ref.file) + j + '</div><pre>' + esc(ref.text) + '</pre></div>';
+      }).join('');
+    }
+    el.innerHTML = html;
+  } catch (e) { el.innerHTML = '<div class="err">❌ ' + esc(e) + '</div>'; }
+}
+
+async function loadNotes() {
+  const el = document.getElementById('nres');
+  try {
+    const r = await fetch('/api/notes');
+    const d = await r.json();
+    document.getElementById('notes-dir').textContent = d.dir;
+    if (!d.notes || !d.notes.length) { el.innerHTML = '<div class="small">暂无归档笔记</div>'; return; }
+    el.innerHTML = d.notes.map(n => '<div class="item"><div class="meta">📄 ' +
+      esc(n.name) + ' · ' + n.size + '</div><pre>' + esc(n.content) + '</pre></div>').join('');
+  } catch (e) { el.innerHTML = '<div class="err">❌ ' + esc(e) + '</div>'; }
+}
+
+loadNotes();
+</script>
+</body>
+</html>
+'''
+
+
+@app.route('/kb')
+def kb():
+    return render_template_string(KB_HTML)
+
+
 @app.after_request
 def add_cors_headers(resp):
     """Allow browser extensions to call the API from any origin."""
@@ -355,6 +495,113 @@ def api_files():
 @app.route('/api/download/<path:filename>')
 def api_download(filename):
     return send_from_directory(OUTPUT_DIR, filename, as_attachment=True)
+
+
+# ── Knowledge base: search / ask / notes ────────────────────────────────
+
+def _search_index_path():
+    """Locate search_index.db (project output dir parent or cwd)."""
+    sys.path.insert(0, str(SCRIPT_DIR))
+    from search import index_path
+    return str(index_path())
+
+
+@app.route('/api/search')
+def api_search():
+    """GET /api/search?q=...&mode=fts|vector&limit=N&file=..."""
+    q = request.args.get('q', '').strip()
+    mode = request.args.get('mode', 'fts')
+    limit = int(request.args.get('limit', '10'))
+    file_filter = request.args.get('file') or None
+    if not q:
+        return jsonify({"status": "failed", "message": "缺少 q 参数"}), 400
+
+    try:
+        sys.path.insert(0, str(SCRIPT_DIR))
+        from search import search, vector_search
+        if mode == 'vector':
+            result = vector_search(q, limit=limit, context=1, file_filter=file_filter)
+        else:
+            result = search(q, limit=limit, context=1, file_filter=file_filter)
+        # Add jump URLs
+        from pathlib import Path as _P
+
+        from search import video_jump_url
+        for m in result.get('matches', []):
+            fname = _P(m['path']).name
+            m['jump_url'] = video_jump_url(fname, m.get('start_ts', ''))
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"status": "failed", "message": str(e)[:200]}), 500
+
+
+@app.route('/api/ask', methods=['POST'])
+def api_ask():
+    """POST /api/ask {question, mode: fts|vector} → RAG answer + references."""
+    data = request.get_json(force=True, silent=True) or {}
+    question = (data.get('question') or '').strip()
+    mode = data.get('mode', 'fts')
+    if not question:
+        return jsonify({"status": "failed", "message": "缺少 question"}), 400
+
+    try:
+        sys.path.insert(0, str(SCRIPT_DIR))
+        # Keyword extraction (mirror search.py --ask)
+        import re as _re
+
+        from search import ask_llm, search, vector_search, video_jump_url
+        stop_zh = {'什么', '怎么', '如何', '为什么', '区别', '是否', '吗', '呢',
+                   '的', '了', '是', '在', '和', '与', '及', '一个', '可以',
+                   '能', '要', '会', '请', '介绍', '讲', '说', '解释', '一下',
+                   '这个', '那个', '哪些', '哪个', '多少', '里面', '中'}
+        stop_en = {'what', 'how', 'why', 'is', 'are', 'the', 'a', 'an', 'of',
+                   'in', 'and', 'to', 'for', 'with', 'on', 'at', 'do', 'does'}
+        ascii_kw = [w.lower() for w in _re.findall(r'[A-Za-z][A-Za-z0-9_*+-]*', question)
+                    if w.lower() not in stop_en]
+        cjk_bigrams = [question[i:i+2] for i in range(len(question) - 1)
+                       if '\u4e00' <= question[i] <= '\u9fff'
+                       and '\u4e00' <= question[i+1] <= '\u9fff']
+        search_query = ' '.join(ascii_kw[:3]) if ascii_kw else \
+            ' '.join(b for b in cjk_bigrams[:3] if b not in stop_zh)
+        if not search_query:
+            search_query = question
+
+        if mode == 'vector':
+            result = vector_search(search_query, limit=6, context=1)
+        else:
+            result = search(search_query, limit=6, context=1)
+        if result.get('status') != 'success' or not result.get('matches'):
+            return jsonify({"status": "failed",
+                            "message": "没有找到相关内容，换个问法试试"})
+
+        answer = ask_llm(question, result['matches'])
+        # Add jump URLs to references
+        for ref in answer.get('references', []):
+            ref['jump_url'] = video_jump_url(ref.get('file', ''),
+                                             ref.get('start_ts', ''))
+        return jsonify(answer)
+    except Exception as e:
+        return jsonify({"status": "failed", "message": str(e)[:200]}), 500
+
+
+@app.route('/api/notes')
+def api_notes():
+    """GET /api/notes?dir=<archive dir> — list markdown notes + content."""
+    dir_arg = request.args.get('dir', '').strip()
+    if not dir_arg:
+        dir_arg = str(Path.home() / 'Desktop' / '视频知识库')
+    notes_dir = Path(dir_arg)
+    notes = []
+    if notes_dir.exists():
+        for f in sorted(notes_dir.glob('*.md'),
+                        key=lambda p: p.stat().st_mtime, reverse=True)[:30]:
+            notes.append({
+                "name": f.name,
+                "size": f"{f.stat().st_size / 1024:.1f} KB",
+                "content": f.read_text(encoding='utf-8', errors='replace')[:4000],
+                "mtime": f.stat().st_mtime,
+            })
+    return jsonify({"status": "success", "dir": str(notes_dir), "notes": notes})
 
 
 def main():
