@@ -472,7 +472,7 @@ def run_whisper_pipeline(video_id, video_url, title, whisper_model, device,
                          chapters=False, chapter_window_sec=60.0,
                          chapter_min=3, chapter_max=20, chapter_top_words=4,
                          time_from=None, time_to=None,
-                         llm_titles=False, args=None):
+                         llm_titles=False, clean=False, args=None):
     """Download audio and transcribe with Whisper."""
     safe_id = safe_video_id(video_url, fallback=video_id or 'video')
 
@@ -548,13 +548,14 @@ def run_whisper_pipeline(video_id, video_url, title, whisper_model, device,
     eprint(f'🎙 Transcribing with Whisper ({whisper_model}, {device}, {backend}) ~{est_sec}s...')
 
     ts_flag = ['--timestamps'] if timestamps else []
+    clean_flag = ['--clean'] if clean else []
     wo_kwargs = [
         '--input', audio_file,
         '--model', whisper_model,
         '--device', device,
         '--model-dir', str(whisper_model_dir),
         '--backend', backend,
-    ] + ts_flag
+    ] + ts_flag + clean_flag
 
     if chunk_minutes and chunk_minutes > 0:
         wo_kwargs += ['--chunk-minutes', str(chunk_minutes)]
@@ -877,7 +878,7 @@ def process_one_video(video, args, whisper_model, device,
         args.chapters, args.chapter_window_sec,
         args.chapter_min, args.chapter_max, args.chapter_top_words,
         args.time_from_sec, args.time_to_sec,
-        args.llm_titles, args
+        args.llm_titles, args.clean, args
     )
 
 
@@ -1000,6 +1001,8 @@ def main():
                         help='Keywords per auto-generated chapter title')
     parser.add_argument('--llm-titles', action='store_true',
                         help='Polish chapter titles via LLM (needs DEEPSEEK_API_KEY)')
+    parser.add_argument('--clean', action='store_true',
+                        help='Clean Whisper transcript: drop fillers, merge duplicates')
     parser.add_argument('--format', default=None,
                         choices=['srt', 'vtt', 'lrc', 'txt'],
                         help='Convert subtitles to standard format (srt/vtt/lrc/txt)')

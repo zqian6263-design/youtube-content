@@ -217,6 +217,47 @@ def transcribe_chunked(args, input_path: str):
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def clean_transcript_text(text: str) -> str:
+    """
+    Clean up raw Whisper output:
+    - drop filler words (呃/嗯/um/uh) at line starts
+    - merge consecutive duplicate lines
+    - collapse >2 blank lines
+    Returns cleaned text.
+    """
+
+    fillers = ('呃', '嗯', '啊', 'um', 'uh', 'hmm', 'erm')
+    out_lines = []
+    for raw in text.split('\n'):
+        line = raw.strip()
+        if not line:
+            if out_lines and out_lines[-1] != '':
+                out_lines.append('')
+            continue
+        # Strip filler prefixes (e.g. "呃，然后" → "然后"; "Um, so" → "so")
+        lower = line.lower()
+        # Drop a line that is ONLY filler words (e.g. "呃", "um")
+        if lower in fillers:
+            continue
+        changed = True
+        while changed:
+            changed = False
+            for f in fillers:
+                if lower.startswith(f) and len(line) > len(f):
+                    rest = line[len(f):].lstrip(' ，,。.！!？?')
+                    if rest:
+                        line = rest
+                        lower = line.lower()
+                        changed = True
+        if not line:
+            continue
+        # Merge consecutive duplicates (Whisper often repeats a line)
+        if out_lines and out_lines[-1].lower() == line.lower():
+            continue
+        out_lines.append(line)
+    return '\n'.join(out_lines)
+
+
 def eprint(*args, **kwargs):
     print(*args, file=sys.stderr, **kwargs)
 
@@ -242,6 +283,8 @@ def main():
                         help='Max parallel chunk workers on CPU (default: cpu_count)')
     parser.add_argument('--timestamps', action='store_true',
                         help='Prefix each line with [MM:SS] timestamps')
+    parser.add_argument('--clean', action='store_true',
+                        help='Clean transcript: drop fillers, merge duplicates')
     args = parser.parse_args()
 
     if not os.path.exists(args.input):
@@ -270,6 +313,9 @@ def main():
                 str(args.model_dir), args.backend
             )
             n_chunks = 1
+        if args.clean and isinstance(result, dict) and result.get('text'):
+            result['text'] = clean_transcript_text(result['text'])
+            result['cleaned'] = True
         result['status'] = 'success'
         result['backend'] = args.backend
         result['chunks'] = n_chunks

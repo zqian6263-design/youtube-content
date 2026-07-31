@@ -1096,6 +1096,17 @@ def test_pipeline_list_playlist_videos_mock():
     print('  ✅ test_pipeline_list_playlist_videos_mock')
 
 
+def test_clean_transcript_text():
+    from transcribe_whisper import clean_transcript_text
+    raw = '呃，今天来聊聊\n嗯\num\nmachine learning is\nmachine learning is\n'
+    out = clean_transcript_text(raw)
+    cleaned_lines = [ln for ln in out.split('\n') if ln.strip()]
+    assert cleaned_lines[0] == '今天来聊聊'
+    assert '嗯' not in cleaned_lines and 'um' not in cleaned_lines
+    assert cleaned_lines.count('machine learning is') == 1
+    print('  ✅ test_clean_transcript_text')
+
+
 def test_detect_chapters_full_pipeline():
     from chapters import detect_chapters, parse_subtitles
     # Simulate a 10-min video with 3 distinct topics
@@ -1189,6 +1200,7 @@ def run_all():
         test_playlist_flat_mode_no_title_field,
         test_video_jump_url,
         test_pipeline_list_playlist_videos_mock,
+        test_clean_transcript_text,
     ]
     failures = 0
     for t in tests:
