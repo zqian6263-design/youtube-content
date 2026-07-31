@@ -128,7 +128,11 @@ def main():
         title = info.get('title', video_id)
 
         # Find the downloaded file (yt-dlp may use different extension)
-        candidates = list(temp_dir.glob(f'{video_id}.*'))
+        # Exclude the output path itself so a stale wav is never treated
+        # as the freshly downloaded source.
+        out_resolved = output_path.resolve()
+        candidates = [c for c in temp_dir.glob(f'{video_id}.*')
+                      if c.resolve() != out_resolved]
         audio_src = None
         for c in candidates:
             if c.suffix.lower() in ('.m4a', '.webm', '.mp3', '.opus', '.aac', '.ogg', '.wav'):
@@ -178,10 +182,13 @@ def main():
         # Cleanup temp: remove only the downloaded source files, NOT the
         # whole temp_dir — it may be a shared directory (output wav lives
         # there when --temp-dir is passed by analyze_youtube).
+        # CRITICAL: never delete the output file itself — when a stale wav
+        # exists in temp_dir it can be picked as audio_src, converted, and
+        # the output path equals that same file.
         try:
-            if audio_src and audio_src.exists():
+            if audio_src and audio_src != output_path and audio_src.exists():
                 audio_src.unlink()
-            if conv_output.exists():
+            if conv_output.exists() and conv_output != output_path:
                 conv_output.unlink()
         except OSError:
             pass
