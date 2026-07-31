@@ -40,8 +40,7 @@ The script distinguishes three kinds of failures — do NOT confuse them:
 | Caption result | Script outputs | Hermes should |
 |---------------|---------------|---------------|
 | `status: "error"` | ID/API/network failure | Report `phase` + `message`, do NOT suggest Whisper |
-| `is_multi_p: true` | (N/A for YouTube) | — |
-| `has_subtitles: false` | Genuinely no captions | Ask user if they want Whisper (default) or auto-transcribe (`--whisper`/`--auto`) |
+| `status: "no_captions"` | Genuinely no captions | Ask user if they want Whisper (default) or auto-transcribe (`--whisper`/`--auto`) |
 
 ## Prerequisites
 
@@ -76,10 +75,12 @@ any authentication. Captions are fetched via YouTube's public endpoints.
 
 | Script | Role |
 |--------|------|
-| `analyze_youtube.py` | **Single entry point.** Modes: default (ask), `--whisper`, `--auto`, `--force-whisper`. Also `--timestamps`, `--languages`, `--whisper-language`, `--device`. |
-| `fetch_subtitle_youtube.py` | Extract captions via youtube-transcript-api. |
+| `analyze_youtube.py` | **Single entry point.** Modes: default (ask), `--whisper`, `--auto`, `--force-whisper`. Also `--timestamps`, `--languages`, `--whisper-language`, `--device auto`. |
+| `fetch_subtitle_youtube.py` | Extract captions via youtube-transcript-api + yt-dlp fallback. |
 | `fetch_audio_youtube.py` | Download audio stream via yt-dlp, convert to WAV. |
 | `transcribe_whisper.py` | Transcribe downloaded audio with Whisper. |
+| `youtube_utils.py` | Shared utilities: ID parsing, .env loading, VTT parsing, GPU detection. |
+| `tests/test_youtube_utils.py` | Unit tests. Run: `python tests/test_youtube_utils.py` |
 
 ## Usage Strategy
 
@@ -136,8 +137,14 @@ python SKILL_DIR/scripts/analyze_youtube.py "URL" --auto --whisper-language auto
 # Use CPU for Whisper (no CUDA)
 python SKILL_DIR/scripts/analyze_youtube.py "URL" --force-whisper --device cpu
 
+# Device auto-detection (default): GPU if available, else CPU
+python SKILL_DIR/scripts/analyze_youtube.py "URL" --force-whisper --device auto
+
 # Full auto with custom model
-python SKILL_DIR/scripts/analyze_youtube.py "URL" --auto --whisper-model base --device cpu
+python SKILL_DIR/scripts/analyze_youtube.py "URL" --auto --whisper-model base --device auto
+
+# Run tests
+python SKILL_DIR/tests/test_youtube_utils.py
 ```
 
 Output files are saved to `SKILL_DIR/output/`:
@@ -225,7 +232,10 @@ Key points, quotes with context, chapter summaries, full transcript, blog post.
 | `WHISPER_MODEL_DIR` | `~/.hermes/whisper/models` | Whisper model storage location |
 | `WHISPER_TEMP` | `~/.hermes/whisper/temp` | Audio download temp directory |
 | `WHISPER_MODEL` | `small` | Default Whisper model name |
-| `WHISPER_DEVICE` | `cuda` | torch device for Whisper |
+| `WHISPER_DEVICE` | `auto` | torch device: auto/cuda/cpu (auto = GPU if available) |
+
+> `WHISPER_DEVICE` defaults to `auto` — the script detects GPU automatically
+> and falls back to CPU when no CUDA is available. No more first-run crashes.
 
 ## Notes
 
@@ -233,18 +243,19 @@ Key points, quotes with context, chapter summaries, full transcript, blog post.
 - ~10% need Whisper fallback (~4 min GPU time per 42 min video)
 - Whisper small model (466MB) stored at `~/.hermes/whisper/models/small.pt`
 - Audio download uses yt-dlp (no authentication needed)
-- YouTube auto-generated captions are generally more reliable than Bilibili AI subtitles
 - Does NOT handle: age-restricted, private, deleted, or live-stream videos
 - Does NOT require YouTube Data API key or OAuth
 - Caption quality varies greatly — auto-generated captions for music
   content are often unusable
+- Run `python tests/test_youtube_utils.py` after changes to catch regressions
 
 ## Comparison with bilibili-content
 
 | Feature | youtube-content | bilibili-content |
 |---------|---------------|-----------------|
 | Auth needed | No | Bilibili cookies |
-| Caption source | youtube-transcript-api | Bilibili API |
+| Caption source | youtube-transcript-api + yt-dlp | Bilibili API |
 | Audio download | yt-dlp | Bilibili playurl API |
-| Multi-P / Playlist | Coming soon | Yes (--page N) |
+| GPU detection | auto (cuda/cpu) | manual --device |
 | Cookie config | Not needed | Required |
+| Unit tests | Yes | No |

@@ -11,32 +11,21 @@ Usage:
   python fetch_subtitle_youtube.py --video-id <VIDEO_ID> [--languages zh-Hans,en] [--timestamps]
 
 Output (JSON to stdout):
-  success: {"status":"success","video_id":"...","language":"...","subtitles":"...","subtitle_count":N}
+  success: {"status":"success","video_id":"...","title":"...","language":"...",
+            "subtitles":"...","subtitle_count":N,"is_auto_generated":bool}
   failed:  {"status":"failed","phase":"...","message":"..."}
 """
 
 import os, sys, json, re, subprocess, tempfile
 from pathlib import Path
 
-
-def extract_video_id(url_or_id: str) -> str | None:
-    if re.match(r'^[A-Za-z0-9_-]{11}$', url_or_id):
-        return url_or_id
-    patterns = [
-        r'(?:youtube\.com/watch\?.*v=)([A-Za-z0-9_-]{11})',
-        r'(?:youtu\.be/)([A-Za-z0-9_-]{11})',
-        r'(?:youtube\.com/embed/)([A-Za-z0-9_-]{11})',
-        r'(?:youtube\.com/shorts/)([A-Za-z0-9_-]{11})',
-        r'(?:v=|youtu\.be/|shorts/|embed/|live/)([a-zA-Z0-9_-]{11})',
-    ]
-    for p in patterns:
-        m = re.search(p, url_or_id)
-        if m:
-            return m.group(1)
-    return None
+# Shared utilities (same directory as this script)
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from youtube_utils import extract_video_id, format_vtt, emit_json
 
 
 def format_segments(segments, include_timestamps: bool = False) -> str:
+    """Format transcript snippets (dicts with text/start) into readable text."""
     lines = []
     for seg in segments:
         text = seg.get('text', '').strip() if isinstance(seg, dict) else str(seg).strip()
@@ -51,7 +40,7 @@ def format_segments(segments, include_timestamps: bool = False) -> str:
 
 
 def try_transcript_api(video_id: str, languages: list, timestamps: bool):
-    """Try fetching captions via youtube-transcript-api."""
+    """Try fetching captions via youtube-transcript-api (v1.x compatible)."""
     try:
         from youtube_transcript_api import YouTubeTranscriptApi
     except ImportError:
@@ -85,28 +74,19 @@ def try_transcript_api(video_id: str, languages: list, timestamps: bool):
             return {"status": "blocked", "message": err[:200]}
         if 'No transcripts' in err or 'TranscriptsDisabled' in err:
             return {"status": "no_captions", "video_id": video_id}
-        # Try yt-dlp for title on error
-        try:
-            import yt_dlp
-            with yt_dlp.YoutubeDL({'quiet': True, 'no_warnings': True}) as ydl:
-                info = ydl.extract_info(video_id, download=False)
-                return {"status": "error", "message": err[:200], "title": info.get('title', video_id)}
-        except:
-            pass
         return {"status": "error", "message": err[:200]}
 
     return None
 
 
 def try_ytdlp_subtitles(video_id: str, languages: list, timestamps: bool):
-    """Fallback: download subtitles via yt-dlp."""
-    with tempfile.TemporaryDirectory(prefix='yt_sub_') as tmpdir:
-        # Try to get available subtitles first
-        try:
-            import yt_dlp
-        except ImportError:
-            return None
+    """Fallback: download subtitles via yt-dlp, preserving timestamps."""
+    try:
+        import yt_dlp
+    except ImportError:
+        return None
 
+    with tempfile.TemporaryDirectory(prefix='yt_sub_') as tmpdir:
         # Step 1: List available subtitles
         try:
             with yt_dlp.YoutubeDL({'quiet': True, 'no_warnings': True}) as ydl:
@@ -119,6 +99,7 @@ def try_ytdlp_subtitles(video_id: str, languages: list, timestamps: bool):
 
         # Find best matching subtitle language
         selected_lang = None
+        is_auto = False
         for lang in languages + ['en', 'zh-Hans', 'zh-Hant']:
             if lang in available_subs:
                 selected_lang = lang
@@ -127,24 +108,22 @@ def try_ytdlp_subtitles(video_id: str, languages: list, timestamps: bool):
             for lang in languages + ['en']:
                 if lang in auto_subs:
                     selected_lang = lang
+                    is_auto = True
                     break
-
         if not selected_lang:
             return None
 
         # Step 2: Download the subtitle
-        sub_format = 'vtt'  # VTT is most reliable
         ydl_opts = {
             'quiet': True,
             'no_warnings': True,
             'writesubtitles': True,
             'writeautomaticsub': True,
             'subtitleslangs': [selected_lang],
-            'subtitlesformat': sub_format,
+            'subtitlesformat': 'vtt',
             'skip_download': True,
             'outtmpl': str(Path(tmpdir) / '%(id)s'),
         }
-
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.download([video_id])
@@ -152,31 +131,16 @@ def try_ytdlp_subtitles(video_id: str, languages: list, timestamps: bool):
             return None
 
         # Step 3: Parse the subtitle file
-        sub_file = Path(tmpdir) / f'{video_id}.{selected_lang}.vtt'
-        if not sub_file.exists():
-            # Try alternative extensions
-            candidates = list(Path(tmpdir).glob(f'{video_id}.*'))
-            sub_file = candidates[0] if candidates else None
-
-        if not sub_file or not sub_file.exists():
+        sub_files = sorted(Path(tmpdir).glob(f'{video_id}.*'))
+        if not sub_files:
             return None
 
-        with open(sub_file, 'r', encoding='utf-8', errors='replace') as f:
+        with open(sub_files[0], 'r', encoding='utf-8', errors='replace') as f:
             vtt_content = f.read()
 
-        # Parse VTT to plain text
-        lines = []
-        for line in vtt_content.split('\n'):
-            line = line.strip()
-            # Skip VTT headers, timestamps, and metadata
-            if (not line or line.startswith('WEBVTT') or line.startswith('Kind:')
-                or line.startswith('Language:') or '-->' in line
-                or line.startswith('[') or line.startswith('</')):
-                continue
-            # Clean VTT tags
-            line = re.sub(r'<[^>]+>', '', line)
-            if line:
-                lines.append(line)
+        # Parse VTT preserving timestamps
+        lines = format_vtt(vtt_content, include_timestamps=timestamps)
+        count = len(lines)
 
         text = '\n'.join(lines)
 
@@ -186,9 +150,9 @@ def try_ytdlp_subtitles(video_id: str, languages: list, timestamps: bool):
                 "video_id": video_id,
                 "language": selected_lang,
                 "subtitles": text,
-                "subtitle_count": len(lines),
-                "is_auto_generated": selected_lang in auto_subs,
-                "title": info.get('title', video_id),
+                "subtitle_count": count,
+                "is_auto_generated": is_auto,
+                "title": title,
             }
 
     return None
@@ -204,9 +168,9 @@ def main():
 
     video_id = extract_video_id(args.video_id)
     if not video_id:
-        print(json.dumps({"status": "failed", "phase": "extract",
-                          "message": f"Could not extract video ID from: {args.video_id}"}))
-        sys.exit(1)
+        emit_json({"status": "failed", "phase": "extract",
+                   "message": f"Could not extract video ID from: {args.video_id}"},
+                  exit_code=1)
 
     languages = [l.strip() for l in args.languages.split(',') if l.strip()]
 
@@ -214,25 +178,21 @@ def main():
     result = try_transcript_api(video_id, languages, args.timestamps)
     if result:
         if result.get('status') == 'success':
-            print(json.dumps(result, ensure_ascii=False))
-            return
-        elif result.get('status') != 'blocked' and result.get('status') != 'no_captions':
-            print(json.dumps(result, ensure_ascii=False))
-            return
+            emit_json(result)
+        elif result.get('status') not in ('blocked', 'no_captions'):
+            emit_json(result, exit_code=1)
 
     # Strategy 2: yt-dlp subtitle extraction (fallback)
     result = try_ytdlp_subtitles(video_id, languages, args.timestamps)
     if result and result.get('status') == 'success':
-        print(json.dumps(result, ensure_ascii=False))
-        return
+        emit_json(result)
 
     # Both failed
-    print(json.dumps({
+    emit_json({
         "status": "failed", "phase": "no_captions",
         "message": f"No captions available for video {video_id} (tried API + yt-dlp fallback)",
         "video_id": video_id
-    }))
-    sys.exit(1)
+    }, exit_code=1)
 
 
 if __name__ == '__main__':

@@ -7,32 +7,18 @@ Usage:
   python fetch_audio_youtube.py --video-id <VIDEO_ID> --output <output.wav> [--temp-dir DIR]
 
 Output (JSON to stdout):
-  On success: {"status": "success", "audio_file": "...", "duration_sec": N}
+  On success: {"status": "success", "audio_file": "...", "duration_sec": N, "title": "..."}
   On failure: {"status": "failed", "phase": "...", "message": "..."}
 
 Phases: extract, download, ffmpeg
 """
 
-import os, sys, json, re, subprocess, tempfile, shutil, time
+import os, sys, json, re, subprocess, tempfile, shutil
 from pathlib import Path
 
-
-def extract_video_id(url_or_id: str) -> str | None:
-    """Extract YouTube video ID from various URL formats or raw ID."""
-    if re.match(r'^[A-Za-z0-9_-]{11}$', url_or_id):
-        return url_or_id
-    patterns = [
-        r'(?:youtube\.com/watch\?.*v=)([A-Za-z0-9_-]{11})',
-        r'(?:youtu\.be/)([A-Za-z0-9_-]{11})',
-        r'(?:youtube\.com/embed/)([A-Za-z0-9_-]{11})',
-        r'(?:youtube\.com/shorts/)([A-Za-z0-9_-]{11})',
-        r'(?:youtube\.com/v/)([A-Za-z0-9_-]{11})',
-    ]
-    for p in patterns:
-        m = re.search(p, url_or_id)
-        if m:
-            return m.group(1)
-    return None
+# Shared utilities (same directory as this script)
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from youtube_utils import extract_video_id, emit_json
 
 
 def main():
@@ -45,11 +31,10 @@ def main():
 
     video_id = extract_video_id(args.video_id)
     if not video_id:
-        print(json.dumps({
+        emit_json({
             "status": "failed", "phase": "extract",
             "message": f"Could not extract video ID from: {args.video_id}"
-        }))
-        sys.exit(1)
+        }, exit_code=1)
 
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -57,11 +42,10 @@ def main():
     temp_dir = Path(args.temp_dir) if args.temp_dir else Path(tempfile.mkdtemp(prefix='yt_audio_'))
     temp_dir.mkdir(parents=True, exist_ok=True)
 
-    temp_audio = temp_dir / f'{video_id}.m4a'
-
     try:
-        import subprocess
-        # Use yt-dlp as CLI subprocess for cleaner output control
+        # ── Step 1: Download best audio stream via yt-dlp CLI ───────────
+        # Using CLI subprocess keeps progress bars out of our stdout,
+        # so the JSON result stays parseable.
         yt_dlp_cmd = [
             'yt-dlp', '--quiet', '--no-progress', '--no-warnings',
             '-f', 'bestaudio/best',
@@ -69,14 +53,13 @@ def main():
             video_id
         ]
         dl_result = subprocess.run(
-            yt_dlp_cmd, capture_output=True, text=True, timeout=300
+            yt_dlp_cmd, capture_output=True, text=True, timeout=600
         )
         if dl_result.returncode != 0:
-            print(json.dumps({
+            emit_json({
                 "status": "failed", "phase": "download",
                 "message": f"yt-dlp download failed: {dl_result.stderr[:200]}"
-            }))
-            sys.exit(1)
+            }, exit_code=1)
 
         # Get video info via yt-dlp JSON output
         info_cmd = ['yt-dlp', '--quiet', '--no-warnings', '--dump-json', video_id]
@@ -86,7 +69,7 @@ def main():
         if info_result.returncode == 0:
             try:
                 info = json.loads(info_result.stdout)
-            except:
+            except json.JSONDecodeError:
                 info = {}
         else:
             info = {}
@@ -97,84 +80,74 @@ def main():
         candidates = list(temp_dir.glob(f'{video_id}.*'))
         audio_src = None
         for c in candidates:
-            if c.suffix.lower() in ('.m4a', '.webm', '.mp3', '.opus', '.aac', '.ogg'):
+            if c.suffix.lower() in ('.m4a', '.webm', '.mp3', '.opus', '.aac', '.ogg', '.wav'):
                 audio_src = c
                 break
         if not audio_src and candidates:
-            audio_src = candidates[0]  # fallback to any file
+            audio_src = candidates[0]
 
         if not audio_src or not audio_src.exists():
-            print(json.dumps({
+            emit_json({
                 "status": "failed", "phase": "download",
                 "message": f"Audio download produced no output file for {video_id}"
-            }))
-            sys.exit(1)
+            }, exit_code=1)
 
-        # ── Step 2: Convert to 16kHz mono WAV via ffmpeg (if needed) ────
-        # Use a temp conversion path to avoid "same as input" error
+        # ── Step 2: Convert to 16kHz mono WAV via ffmpeg ────────────────
+        # Use a distinct temp path to avoid "same as input" errors when
+        # yt-dlp already produced a WAV (it sometimes does for 16000Hz).
         conv_output = temp_dir / f'{video_id}_conv.wav'
         ffmpeg_cmd = [
             'ffmpeg', '-y', '-i', str(audio_src),
             '-ar', '16000', '-ac', '1', '-c:a', 'pcm_s16le',
             str(conv_output)
         ]
-
         result = subprocess.run(
-            ffmpeg_cmd, capture_output=True, text=True, timeout=300
+            ffmpeg_cmd, capture_output=True, text=True, timeout=600
         )
 
         if result.returncode != 0:
-            # Check if input is already the right format
-            if result.returncode == 4294967274 and 'same as Input' in result.stderr:
-                # Input file is already a 16kHz mono WAV — just copy/move it
-                import shutil
+            # If input is already a 16kHz mono WAV, ffmpeg refuses to
+            # overwrite in place; just copy it to the output path.
+            if 'same as Input' in result.stderr:
                 shutil.copy2(str(audio_src), str(output_path))
             else:
-                print(json.dumps({
+                emit_json({
                     "status": "failed", "phase": "ffmpeg",
                     "message": f"ffmpeg conversion failed: {result.stderr[:200]}"
-                }))
-                sys.exit(1)
+                }, exit_code=1)
         else:
-            # Move converted file to final output
-            import shutil
             shutil.move(str(conv_output), str(output_path))
 
         if not output_path.exists():
-            print(json.dumps({
+            emit_json({
                 "status": "failed", "phase": "ffmpeg",
                 "message": "ffmpeg created no output file"
-            }))
-            sys.exit(1)
+            }, exit_code=1)
 
-        # Cleanup temp (only if auto-generated, not user-provided)
-        if not args.temp_dir:
-            try:
-                shutil.rmtree(temp_dir, ignore_errors=True)
-            except:
-                pass
+        # Cleanup temp
+        try:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+        except OSError:
+            pass
 
-        print(json.dumps({
+        emit_json({
             "status": "success",
-            "video_id": video_id,
             "audio_file": str(output_path),
             "duration_sec": duration,
             "title": title,
-        }, ensure_ascii=False))
+            "video_id": video_id,
+        })
 
     except Exception as e:
-        # Cleanup on error (only if auto-generated)
-        if not args.temp_dir:
-            try:
-                shutil.rmtree(temp_dir, ignore_errors=True)
-            except:
-                pass
-        print(json.dumps({
+        try:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+        except OSError:
+            pass
+        emit_json({
             "status": "failed", "phase": "download",
             "message": f"Audio download error: {str(e)}",
             "video_id": video_id
-        }))
-        sys.exit(1)
+        }, exit_code=1)
 
 
 if __name__ == '__main__':
