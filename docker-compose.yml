@@ -1,0 +1,17 @@
+services:
+  youtube-content:
+    build: .
+    container_name: youtube-content
+    ports:
+      - "8080:8080"
+    volumes:
+      - yt_output:/app/output
+    environment:
+      - WHISPER_DEVICE=cpu
+      - WHISPER_MODEL=small
+      # 可选：翻译/问答需要
+      # - DEEPSEEK_API_KEY=sk-xxx
+    restart: unless-stopped
+
+volumes:
+  yt_output:

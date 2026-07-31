@@ -1,0 +1,20 @@
+# Secrets & local state
+.env
+cache.db
+search_index.db
+*.wav
+*.m4a
+*.webm
+
+# Output (mounted as volume)
+output/*
+
+# Git & caches
+.git
+__pycache__
+*.pyc
+.pytest_cache
+.ruff_cache
+*.egg-info
+.venv
+venv
