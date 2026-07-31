@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "YouTube Content Summarizer",
+  "version": "0.19.0",
+  "description": "一键总结当前 YouTube 视频：提取字幕、章节、翻译（需要本地运行 youtube-content Web UI）",
+  "permissions": ["activeTab", "storage"],
+  "host_permissions": ["http://127.0.0.1:8080/*", "http://localhost:8080/*"],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "YouTube 内容总结"
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://*.youtube.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

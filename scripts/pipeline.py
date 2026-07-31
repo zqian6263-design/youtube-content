@@ -143,6 +143,9 @@ def main():
                         help='Translate subtitles (needs DEEPSEEK_API_KEY)')
     parser.add_argument('--reindex', action='store_true',
                         help='Rebuild the search index after processing')
+    parser.add_argument('--vector', action='store_true',
+                        help='With --reindex: also build vector embeddings '
+                             '(needs: pip install fastembed)')
     parser.add_argument('--languages', default='zh-Hans,zh-Hant,en')
     args = parser.parse_args()
 
@@ -198,6 +201,15 @@ def main():
         eprint('🔎 重建搜索索引...')
         index_info = reindex(args.archive, DEFAULT_OUTPUT)
         eprint(f'  ✅ {index_info.get("segments", 0)} 段索引')
+        if args.vector:
+            eprint('🧠 构建向量索引（可能需要几分钟）...')
+            from search import build_vector_index, index_path
+            vec_result = build_vector_index(index_path(), verbose=True)
+            if vec_result.get('status') == 'success':
+                index_info['vector_segments'] = vec_result.get('segments', 0)
+                eprint(f'  ✅ 向量索引: {vec_result.get("segments", 0)} 段')
+            else:
+                eprint(f'  ⚠ 向量索引失败: {vec_result.get("message", "")}')
 
     # Report
     success = sum(1 for r in all_results if r['status'] == 'success')

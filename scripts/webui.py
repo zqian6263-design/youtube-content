@@ -212,6 +212,63 @@ def index():
     return render_template_string(HTML)
 
 
+@app.after_request
+def add_cors_headers(resp):
+    """Allow browser extensions to call the API from any origin."""
+    resp.headers['Access-Control-Allow-Origin'] = '*'
+    resp.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
+    resp.headers['Access-Control-Allow-Headers'] = 'Content-Type'
+    return resp
+
+
+@app.route('/api/quick')
+def api_quick():
+    """Quick API for the browser extension.
+
+    GET /api/quick?url=<video>&max=<chars>
+    Returns: {status, title, text, chapters}
+    """
+    url = request.args.get('url', '').strip()
+    max_chars = int(request.args.get('max', '3000'))
+    if not url:
+        return jsonify({"status": "failed", "message": "缺少 url 参数"}), 400
+
+    cmd = [sys.executable, str(ANALYZE_PY), url, '--chapters']
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        out = result.stdout.strip()
+        idx = out.find('{')
+        if idx < 0:
+            return jsonify({"status": "failed", "message": out[:200] or "无输出"})
+        data = json.loads(out[idx:])
+    except subprocess.TimeoutExpired:
+        return jsonify({"status": "failed", "message": "处理超时"})
+    except json.JSONDecodeError:
+        return jsonify({"status": "failed", "message": "输出解析失败"})
+
+    if data.get('status') != 'success':
+        return jsonify(data)
+
+    # Attach transcript text (skip header)
+    text = ''
+    try:
+        p = Path(data.get('transcript_file', ''))
+        lines = p.read_text(encoding='utf-8').split('\n')
+        text = '\n'.join(lines[3:])[:max_chars]
+    except OSError:
+        pass
+
+    return jsonify({
+        "status": "success",
+        "title": data.get('title', ''),
+        "text": text,
+        "chapters": data.get('chapters', []),
+        "transcript_file": data.get('transcript_file'),
+        "converted_file": data.get('converted_file'),
+        "translated_file": data.get('translated_file'),
+    })
+
+
 @app.route('/api/analyze', methods=['POST'])
 def api_analyze():
     data = request.get_json(force=True)

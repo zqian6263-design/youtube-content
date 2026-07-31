@@ -201,6 +201,11 @@ python SKILL_DIR/scripts/pipeline.py --config watch_config.json \
 # Web UI (needs: pip install flask)
 python SKILL_DIR/scripts/webui.py --port 8080   # → http://127.0.0.1:8080
 
+# Browser extension (Chrome/Edge): load unpacked extension/ folder
+# 1. python scripts/webui.py
+# 2. chrome://extensions → 开发者模式 → 加载已解压的扩展 → extension/
+# 3. 打开任意 YouTube 视频 → 点 "📋 总结此视频"
+
 # Docker: one-command service
 docker compose up -d     # web UI at http://localhost:8080
 
