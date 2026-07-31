@@ -175,9 +175,14 @@ def main():
                 "message": "ffmpeg created no output file"
             }, exit_code=1)
 
-        # Cleanup temp
+        # Cleanup temp: remove only the downloaded source files, NOT the
+        # whole temp_dir — it may be a shared directory (output wav lives
+        # there when --temp-dir is passed by analyze_youtube).
         try:
-            shutil.rmtree(temp_dir, ignore_errors=True)
+            if audio_src and audio_src.exists():
+                audio_src.unlink()
+            if conv_output.exists():
+                conv_output.unlink()
         except OSError:
             pass
 
@@ -190,8 +195,12 @@ def main():
         })
 
     except Exception as e:
+        # On failure, clean only our own artifacts (never rmtree a shared dir)
         try:
-            shutil.rmtree(temp_dir, ignore_errors=True)
+            if 'audio_src' in dir() and audio_src and audio_src.exists():
+                audio_src.unlink()
+            if 'conv_output' in dir() and conv_output.exists():
+                conv_output.unlink()
         except OSError:
             pass
         emit_json({

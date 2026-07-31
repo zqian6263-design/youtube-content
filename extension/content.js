@@ -81,7 +81,47 @@ async function onClick() {
       }
       showPanel(html, true);
     } else if (data.status === 'needs_confirmation') {
-      showPanel('📭 该视频无字幕。<br>用 Whisper 转写需在本地运行:<br><code>analyze_youtube.py "URL" --whisper</code>', false);
+      showPanel('📭 该视频无可用字幕。', true);
+      // Whisper fallback button
+      const body = document.querySelector('#yt-summary-body');
+      const btn = document.createElement('button');
+      btn.textContent = '🎙 用 Whisper 转写（较慢，几分钟）';
+      btn.style.cssText = 'margin-top:10px;padding:8px 12px;border:none;border-radius:8px;' +
+        'background:#9a6700;color:#fff;font-size:13px;cursor:pointer;width:100%';
+      btn.addEventListener('click', async () => {
+        btn.disabled = true; btn.textContent = '⏳ 转写中，请耐心等待（长视频需 10-30 分钟）...';
+        try {
+          const resp = await fetch(`${API}?url=${encodeURIComponent(vid)}&max=6000&whisper=1`,
+            { signal: AbortSignal.timeout(3600000) });
+          const wdata = await resp.json();
+          if (wdata.status === 'success') {
+            let html = `<b>${escapeHtml(wdata.title || '')}</b><br>`;
+            if (wdata.chapters && wdata.chapters.length) {
+              html += '<hr><b>📑 章节</b><ul style="margin:6px 0;padding-left:20px">';
+              wdata.chapters.slice(0, 10).forEach(c => {
+                html += `<li>${escapeHtml(c.start_ts)} — ${escapeHtml(c.title)}</li>`;
+              });
+              html += '</ul>';
+            }
+            if (wdata.summary) {
+              html += '<hr><b>📝 总结</b><div style="white-space:pre-wrap;word-break:break-word;margin-top:6px">' +
+                escapeHtml(wdata.summary) + '</div>';
+            }
+            html += '<hr><div style="white-space:pre-wrap;word-break:break-word">' +
+              escapeHtml((wdata.text || '').slice(0, 4000)) + '</div>';
+            showPanel(html, true);
+          } else {
+            showPanel('❌ ' + escapeHtml(wdata.message || '转写失败'), false);
+          }
+        } catch (e) {
+          showPanel('❌ 转写请求失败: ' + escapeHtml(String(e)), false);
+        }
+      });
+      body.appendChild(btn);
+      body.appendChild(document.createElement('br'));
+      body.appendChild(Object.assign(document.createElement('small'), {
+        textContent: '也可在本地运行: analyze_youtube.py "URL" --whisper'
+      }));
     } else {
       showPanel('❌ ' + escapeHtml(data.message || '处理失败'), false);
     }

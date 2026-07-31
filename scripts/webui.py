@@ -225,12 +225,14 @@ def add_cors_headers(resp):
 def api_quick():
     """Quick API for the browser extension.
 
-    GET /api/quick?url=<video>&max=<chars>&summarize=<0|1>
+    GET /api/quick?url=<video>&max=<chars>&summarize=<0|1>&whisper=<0|1>
+    whisper=1: if no captions, transcribe audio with Whisper (slow).
     Returns: {status, title, summary, text, chapters}
     """
     url = request.args.get('url', '').strip()
     max_chars = int(request.args.get('max', '3000'))
     do_summarize = request.args.get('summarize', '1') != '0'
+    do_whisper = request.args.get('whisper', '0') == '1'
     if not url:
         return jsonify({"status": "failed", "message": "缺少 url 参数"}), 400
 
@@ -246,6 +248,20 @@ def api_quick():
         return jsonify({"status": "failed", "message": "处理超时"})
     except json.JSONDecodeError:
         return jsonify({"status": "failed", "message": "输出解析失败"})
+
+    # No captions → optional Whisper fallback (slow: minutes)
+    if data.get('status') == 'needs_confirmation' and do_whisper:
+        try:
+            wcmd = [sys.executable, str(ANALYZE_PY), url, '--whisper', '--chapters']
+            wresult = subprocess.run(wcmd, capture_output=True, text=True, timeout=3600)
+            wout = wresult.stdout.strip()
+            widx = wout.find('{')
+            if widx >= 0:
+                data = json.loads(wout[widx:])
+        except subprocess.TimeoutExpired:
+            return jsonify({"status": "failed", "message": "Whisper 转写超时（视频过长）"})
+        except json.JSONDecodeError:
+            pass
 
     if data.get('status') != 'success':
         return jsonify(data)
@@ -264,8 +280,9 @@ def api_quick():
     if do_summarize and text:
         try:
             sys.path.insert(0, str(SCRIPT_DIR))
-            from analyze_youtube import summarize_transcript
             import argparse as _ap
+
+            from analyze_youtube import summarize_transcript
             s_args = _ap.Namespace(
                 translate_api_key=None, translate_base_url=None, translate_model=None)
             summary, _used_cache = summarize_transcript(

@@ -263,8 +263,9 @@ def summarize_transcript(transcript, video_id, title, args=None, max_chars=6000)
     Returns (summary_text, used_cache). Falls back to a truncated preview
     of the transcript if no API key or the LLM call fails.
     """
-    from translate import call_llm, resolve_api_key
     import types as _types
+
+    from translate import call_llm, resolve_api_key
 
     key_args = _types.SimpleNamespace(
         api_key=getattr(args, 'translate_api_key', None))

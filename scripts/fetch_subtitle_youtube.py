@@ -145,16 +145,25 @@ def try_ytdlp_subtitles(video_id: str, languages: list, timestamps: bool):
         # Find best matching subtitle language
         selected_lang = None
         is_auto = False
+        # 1. Preferred languages (manual subs)
         for lang in languages + ['en', 'zh-Hans', 'zh-Hant']:
             if lang in available_subs:
                 selected_lang = lang
                 break
+        # 2. Preferred languages (auto subs)
         if not selected_lang:
-            for lang in languages + ['en']:
+            for lang in languages + ['en', 'zh-Hans', 'zh-Hant']:
                 if lang in auto_subs:
                     selected_lang = lang
                     is_auto = True
                     break
+        # 3. Any manual sub in any language (user can see subs, grab whatever exists)
+        if not selected_lang and available_subs:
+            selected_lang = next(iter(available_subs))
+        # 4. Any auto sub in any language
+        if not selected_lang and auto_subs:
+            selected_lang = next(iter(auto_subs))
+            is_auto = True
         if not selected_lang:
             return None
 
