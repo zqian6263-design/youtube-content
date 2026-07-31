@@ -163,8 +163,9 @@ def translate_transcript(transcript, video_id, title, target='zh', args=None):
     """
     Translate a transcript via the LLM API. Returns (translated_path, text).
 
-    Saves `{video_id}_{title}_{target}.txt`. Returns (None, None) on failure
-    (e.g. missing API key).
+    Cached in SQLite (key: video_id + target + model) — re-running the same
+    video does not re-spend API credits. Saves `{video_id}_{title}_{target}.txt`.
+    Returns (None, None) on failure (e.g. missing API key).
     """
     try:
         import argparse as _argparse
@@ -183,6 +184,21 @@ def translate_transcript(transcript, video_id, title, target='zh', args=None):
     except ImportError:
         return None, None
 
+    # Check translation cache first (skip API call on repeat)
+    cache = get_cache()
+    cached = cache.get_translation(video_id, target, t_args.model)
+    if cached and cached.get('status') == 'success':
+        translated = cached.get('translated_text', '')
+        if translated:
+            safe_title = safe_filename(title)
+            out_path = OUTPUT_DIR / f'{video_id}_{safe_title}_{target}.txt'
+            with open(out_path, 'w', encoding='utf-8') as f:
+                f.write(f'标题: {title}\n翻译: {target}\n')
+                f.write('=' * 40 + '\n')
+                f.write(translated)
+            eprint(f'📦 命中翻译缓存: {video_id}')
+            return str(out_path), translated
+
     eprint(f'🌐 翻译中（目标语言: {target}）...')
     result = translate_text(transcript, t_args)
     if result.get('status') != 'success':
@@ -197,6 +213,9 @@ def translate_transcript(transcript, video_id, title, target='zh', args=None):
         f.write('=' * 40 + '\n')
         f.write(translated)
     eprint(f'🌐 翻译完成 ({result.get("chunks", 1)} 块)')
+
+    # Cache the translation
+    cache.set_translation(video_id, target, t_args.model, result)
     return str(out_path), translated
 
 
@@ -650,9 +669,24 @@ def process_playlist(playlist_url, args, whisper_model, device,
     eprint(f'📋 播放列表包含 {len(videos)} 个视频')
 
     results = []
+    skipped = 0
+    cache = get_cache()
     for i, v in enumerate(videos, 1):
         vid = v['id']
         title = v.get('title', '')
+
+        # Resume support: skip videos already processed (cached subtitles)
+        cached = cache.get_subtitles(vid, args.languages, args.timestamps)
+        if cached:
+            skipped += 1
+            eprint(f'[{i}/{len(videos)}] ⏭ 跳过 {vid}（已处理）')
+            results.append({
+                "index": i, "video_id": vid, "title": title,
+                "status": "success", "skipped": True,
+                "message": "已在缓存中，跳过",
+            })
+            continue
+
         eprint(f'\n[{i}/{len(videos)}] {vid} — {title}')
         result = process_one_video(
             vid, args, whisper_model, device,
@@ -663,7 +697,8 @@ def process_playlist(playlist_url, args, whisper_model, device,
         results.append(result)
 
     success_count = sum(1 for r in results if r.get('status') == 'success')
-    eprint(f'\n📋 播放列表处理完成: {success_count}/{len(results)} 成功')
+    eprint(f'\n📋 播放列表处理完成: {success_count}/{len(results)} 成功'
+           f'（跳过 {skipped} 个已处理）')
 
     return {
         "status": "success",
@@ -671,6 +706,7 @@ def process_playlist(playlist_url, args, whisper_model, device,
         "playlist_title": pl_result.get('playlist_title', ''),
         "total": len(results),
         "success_count": success_count,
+        "skipped_count": skipped,
         "results": results,
     }
 

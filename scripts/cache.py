@@ -124,6 +124,24 @@ class Cache:
         key = f'whisper:{video_id}:{model}:{backend}'
         self._set(key, json.dumps(result, ensure_ascii=False))
 
+    # ── Translation cache ───────────────────────────────────────────────
+
+    def get_translation(self, video_id: str, target: str, model: str):
+        """Get cached translation. Key: trans:{video_id}:{target}:{model}"""
+        key = f'trans:{video_id}:{target}:{model}'
+        payload = self._get(key)
+        if payload is None:
+            return None
+        try:
+            return json.loads(payload)
+        except json.JSONDecodeError:
+            self.delete(key)
+            return None
+
+    def set_translation(self, video_id: str, target: str, model: str, result: dict):
+        key = f'trans:{video_id}:{target}:{model}'
+        self._set(key, json.dumps(result, ensure_ascii=False))
+
     def stats(self) -> dict:
         with _lock:
             total = self._conn.execute('SELECT COUNT(*) FROM cache').fetchone()[0]
@@ -131,7 +149,9 @@ class Cache:
                 "SELECT COUNT(*) FROM cache WHERE cache_key LIKE 'sub:%'").fetchone()[0]
             whisp = self._conn.execute(
                 "SELECT COUNT(*) FROM cache WHERE cache_key LIKE 'whisper:%'").fetchone()[0]
-        return {'total': total, 'subtitles': subs, 'whisper': whisp}
+            trans = self._conn.execute(
+                "SELECT COUNT(*) FROM cache WHERE cache_key LIKE 'trans:%'").fetchone()[0]
+        return {'total': total, 'subtitles': subs, 'whisper': whisp, 'translations': trans}
 
     def close(self):
         """Close the SQLite connection (releases the file lock on Windows)."""

@@ -86,8 +86,8 @@ any authentication. Captions are fetched via YouTube's public endpoints.
 | `watch_channel.py` | Watch channel/playlist for new videos → Markdown report (cron-friendly). |
 | `fetch_audio_youtube.py` | Download audio stream via yt-dlp, convert to WAV. Supports `--start-sec/--end-sec` section download. |
 | `youtube_utils.py` | Shared utilities: ID parsing, .env loading, VTT parsing, GPU detection. |
-| `cache.py` | SQLite cache (subtitles + transcripts, 7-day TTL). |
-| `tests/test_youtube_utils.py` | 42 unit tests. Run: `python tests/test_youtube_utils.py` |
+| `cache.py` | SQLite cache (subtitles + transcripts + translations, 7-day TTL). |
+| `tests/test_youtube_utils.py` | 45 unit tests. Run: `python tests/test_youtube_utils.py` |
 
 ## Usage Strategy
 
@@ -173,6 +173,9 @@ python SKILL_DIR/scripts/analyze_youtube.py "URL" --translate --translate-target
 
 # Time range: only process a section (90, 01:30, 1:02:30)
 python SKILL_DIR/scripts/analyze_youtube.py "URL" --from 10:00 --to 20:00
+
+# Whisper transcription with [MM:SS] timestamps (v0.10)
+python SKILL_DIR/scripts/analyze_youtube.py "URL" --force-whisper --timestamps
 
 # Watch a channel for new videos (cron-friendly: empty output when nothing new)
 python SKILL_DIR/scripts/watch_channel.py --channel "@handle" --max 5

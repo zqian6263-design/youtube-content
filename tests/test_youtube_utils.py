@@ -620,6 +620,52 @@ def test_watch_cache_filtering():
     print('  ✅ test_watch_cache_filtering')
 
 
+# ── Whisper timestamps ─────────────────────────────────────────────────
+
+def test_format_segments_timestamps():
+    from transcribe_whisper import _format_segments_timestamps
+    segments = [
+        {"start": 0.0, "text": "first line"},
+        {"start": 65.5, "text": "second line"},
+        {"start": 130.0, "text": "third line"},
+    ]
+    out = _format_segments_timestamps(segments)
+    lines = out.split('\n')
+    assert lines[0] == '[00:00] first line'
+    assert lines[1] == '[01:05] second line'
+    assert lines[2] == '[02:10] third line'
+    print('  ✅ test_format_segments_timestamps')
+
+
+def test_format_segments_timestamps_with_offset():
+    from transcribe_whisper import _format_segments_timestamps
+    segments = [{"start": 10.0, "text": "chunk two"}]
+    out = _format_segments_timestamps(segments, offset_sec=60.0)
+    assert out == '[01:10] chunk two', out
+    print('  ✅ test_format_segments_timestamps_with_offset')
+
+
+def test_translation_cache_roundtrip():
+    from cache import Cache
+    with tempfile.TemporaryDirectory() as td:
+        c = Cache(db_path=Path(td) / 'test.db')
+        try:
+            assert c.get_translation('vid1', 'zh', 'deepseek-chat') is None
+            c.set_translation('vid1', 'zh', 'deepseek-chat', {
+                "status": "success", "translated_text": "你好世界",
+            })
+            hit = c.get_translation('vid1', 'zh', 'deepseek-chat')
+            assert hit is not None
+            assert hit['translated_text'] == '你好世界'
+            # Different model → miss
+            assert c.get_translation('vid1', 'zh', 'other-model') is None
+            # Different target → miss
+            assert c.get_translation('vid1', 'ja', 'deepseek-chat') is None
+        finally:
+            c.close()
+    print('  ✅ test_translation_cache_roundtrip')
+
+
 def test_detect_chapters_full_pipeline():
     from chapters import detect_chapters, parse_subtitles
     # Simulate a 10-min video with 3 distinct topics
@@ -691,6 +737,9 @@ def run_all():
         test_watch_summarize_strips_timestamps,
         test_watch_summarize_truncates,
         test_watch_cache_filtering,
+        test_format_segments_timestamps,
+        test_format_segments_timestamps_with_offset,
+        test_translation_cache_roundtrip,
     ]
     failures = 0
     for t in tests:

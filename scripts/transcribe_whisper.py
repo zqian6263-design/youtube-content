@@ -27,6 +27,7 @@ import argparse
 import json
 import math
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -81,8 +82,22 @@ def split_audio(input_path: str, out_dir: Path, chunk_sec: float, prefix: str):
 
 # ── Single-chunk transcription (runs in worker process) ────────────────
 
+def _format_segments_timestamps(segments, offset_sec: float = 0.0) -> str:
+    """Format segments as [MM:SS] text lines, with optional time offset."""
+    lines = []
+    for seg in segments:
+        text = (seg.get('text') or '').strip()
+        if not text:
+            continue
+        start = offset_sec + float(seg.get('start', 0) or 0)
+        m, s = divmod(max(0, int(start)), 60)
+        lines.append(f'[{m:02d}:{s:02d}] {text}')
+    return '\n'.join(lines)
+
+
 def _transcribe_file(input_path: str, model_name: str, device: str,
-                     language: str, model_dir: str, backend: str) -> dict:
+                     language: str, model_dir: str, backend: str,
+                     include_timestamps: bool = False) -> dict:
     """Transcribe one audio file (used directly and as process-pool worker)."""
     if backend == 'faster-whisper':
         from faster_whisper import WhisperModel
@@ -93,7 +108,11 @@ def _transcribe_file(input_path: str, model_name: str, device: str,
             input_path,
             language=(language if language != 'auto' else None),
         )
-        text = ' '.join(seg.text.strip() for seg in segments_iter)
+        segments = list(segments_iter)
+        if include_timestamps:
+            text = _format_segments_timestamps(segments)
+        else:
+            text = ' '.join(seg.text.strip() for seg in segments)
         lang = getattr(info, 'language', language or 'auto')
         return {"text": text, "language": lang}
 
@@ -103,8 +122,12 @@ def _transcribe_file(input_path: str, model_name: str, device: str,
     if language and language != 'auto':
         kwargs['language'] = language
     result = model.transcribe(input_path, **kwargs)
+    if include_timestamps:
+        text = _format_segments_timestamps(result.get('segments') or [])
+    else:
+        text = result.get('text', '').strip()
     return {
-        "text": result.get('text', '').strip(),
+        "text": text,
         "language": result.get('language', language or 'auto'),
     }
 
@@ -122,10 +145,12 @@ def transcribe_chunked(args, input_path: str):
     duration = get_audio_duration(input_path)
     n_chunks = max(1, math.ceil(duration / chunk_sec))
 
+    include_ts = bool(getattr(args, 'timestamps', False))
+
     if n_chunks <= 1:
         return _transcribe_file(
             input_path, args.model, args.device, args.language,
-            str(args.model_dir), args.backend
+            str(args.model_dir), args.backend, include_ts
         ), 1
 
     eprint(f'🔪 音频 {duration:.0f}s → {n_chunks} 个分块（每个 {args.chunk_minutes} 分钟）')
@@ -143,7 +168,7 @@ def transcribe_chunked(args, input_path: str):
             eprint(f'⚡ 并行转写 ({workers} 进程)...')
             tasks = [
                 (path, args.model, args.device, args.language,
-                 str(args.model_dir), args.backend)
+                 str(args.model_dir), args.backend, include_ts)
                 for _, path in chunks
             ]
             with ProcessPoolExecutor(max_workers=workers) as pool:
@@ -154,7 +179,7 @@ def transcribe_chunked(args, input_path: str):
             for idx, path in chunks:
                 results[idx] = _transcribe_file(
                     path, args.model, args.device, args.language,
-                    str(args.model_dir), args.backend
+                    str(args.model_dir), args.backend, include_ts
                 )
 
         # Merge chunks in order
@@ -166,7 +191,25 @@ def transcribe_chunked(args, input_path: str):
                 languages.add(r['language'])
             text_parts.append(r.get('text', ''))
 
-        text = '\n\n'.join(p for p in text_parts if p)
+        if include_ts:
+            # Re-stamp each chunk's [MM:SS] with the chunk offset
+            merged = []
+            for idx in sorted(results):
+                r = results[idx]
+                for line in r.get('text', '').split('\n'):
+                    if not line.strip():
+                        continue
+                    m = re.match(r'^\[(\d{2}):(\d{2})\]\s*(.*)$', line)
+                    if m:
+                        mm, ss, content = m.groups()
+                        abs_sec = idx * chunk_sec + int(mm) * 60 + int(ss)
+                        am, as_ = divmod(int(abs_sec), 60)
+                        merged.append(f'[{am:02d}:{as_:02d}] {content}')
+                    else:
+                        merged.append(line)
+            text = '\n'.join(merged)
+        else:
+            text = '\n\n'.join(p for p in text_parts if p)
         language = languages.pop() if len(languages) == 1 else (args.language or 'auto')
 
         return {"text": text, "language": language}, n_chunks
@@ -197,6 +240,8 @@ def main():
                              'CPU: parallel across processes; GPU: sequential (OOM-safe)')
     parser.add_argument('--chunk-workers', type=int, default=0,
                         help='Max parallel chunk workers on CPU (default: cpu_count)')
+    parser.add_argument('--timestamps', action='store_true',
+                        help='Prefix each line with [MM:SS] timestamps')
     args = parser.parse_args()
 
     if not os.path.exists(args.input):
