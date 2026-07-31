@@ -109,8 +109,68 @@ def save_output(video_id, title, transcript, source_type, metadata):
     return txt_path, meta_path
 
 
+def llm_chapter_titles(chapters, title, target='zh', args=None):
+    """
+    Convert keyword-based chapter titles to fluent titles via LLM.
+
+    Returns a new list of chapter dicts with polished 'title' values,
+    or the original list if the LLM call fails.
+    """
+    try:
+        import types as _types
+
+        from translate import call_llm, resolve_api_key
+    except ImportError:
+        return chapters
+
+    # resolve_api_key expects an .api_key attribute; adapt our args
+    key_args = _types.SimpleNamespace(
+        api_key=getattr(args, 'translate_api_key', None))
+    api_key = resolve_api_key(key_args)
+    if not api_key:
+        eprint('⚠ LLM 章节标题需要 API key（DEEPSEEK_API_KEY），使用关键词标题')
+        return chapters
+
+    base_url = (getattr(args, 'translate_base_url', None)
+                or os.environ.get('TRANSLATE_BASE_URL', 'https://api.deepseek.com/v1'))
+    model = (getattr(args, 'translate_model', None)
+             or os.environ.get('TRANSLATE_MODEL', 'deepseek-chat'))
+
+    lines = [f'{i + 1}. [{c["start_ts"]}] {c["title"]}' for i, c in enumerate(chapters)]
+    system = (
+        f'You are a video chapter title editor. Given a list of video chapters '
+        f'with timestamp and keyword tags, rewrite each title into a fluent, '
+        f'concise {target} title (max 15 chars for Chinese, max 8 words for '
+        f'English). Keep the numbering and timestamp format exactly. '
+        f'Output ONLY the numbered list, one per line.'
+    )
+    user = f'Video: {title}\n\nChapters:\n' + '\n'.join(lines)
+
+    try:
+        out = call_llm(api_key, base_url, model, system, user, timeout=120)
+    except Exception as e:
+        eprint(f'⚠ LLM 章节标题失败: {str(e)[:150]}，使用关键词标题')
+        return chapters
+
+    # Parse "1. [00:00] New title" or "1. New title" lines (LLM may drop timestamps)
+    new_titles = []
+    import re as _re
+    for raw in out.split('\n'):
+        m = _re.match(r'\s*\d+\.?\s*(?:\[\d{2}:\d{2}\]|\[L\d+\])?\s*(.*)', raw)
+        if m:
+            new_titles.append(m.group(1).strip())
+    if len(new_titles) != len(chapters):
+        eprint(f'⚠ LLM 返回 {len(new_titles)} 个标题（期望 {len(chapters)}），保留关键词标题')
+        return chapters
+
+    for c, nt in zip(chapters, new_titles):
+        c['title'] = nt
+    return chapters
+
+
 def generate_chapters(transcript, video_id, title, window_sec=60.0,
-                      min_chapters=3, max_chapters=20, top_words=4):
+                      min_chapters=3, max_chapters=20, top_words=4,
+                      llm_titles=False, args=None):
     """
     Detect chapters from a transcript. Returns (chapters_list, chapters_path).
 
@@ -129,6 +189,11 @@ def generate_chapters(transcript, video_id, title, window_sec=60.0,
 
     if not chapters:
         return [], None
+
+    # Optional: polish titles via LLM
+    if llm_titles:
+        chapters = llm_chapter_titles(chapters, title, target='zh', args=args)
+        eprint('📑 LLM 章节标题生成完成')
 
     safe_title = safe_filename(title)
     ch_path = OUTPUT_DIR / f'{video_id}_{safe_title}_chapters.json'
@@ -159,7 +224,8 @@ def convert_subtitles_to(segments, fmt, video_id, title):
     return str(out_path), content
 
 
-def translate_transcript(transcript, video_id, title, target='zh', args=None):
+def translate_transcript(transcript, video_id, title, target='zh', args=None,
+                         bilingual=False):
     """
     Translate a transcript via the LLM API. Returns (translated_path, text).
 
@@ -191,11 +257,23 @@ def translate_transcript(transcript, video_id, title, target='zh', args=None):
         translated = cached.get('translated_text', '')
         if translated:
             safe_title = safe_filename(title)
-            out_path = OUTPUT_DIR / f'{video_id}_{safe_title}_{target}.txt'
+            suffix = f'{target}-bi' if bilingual else target
+            out_path = OUTPUT_DIR / f'{video_id}_{safe_title}_{suffix}.txt'
+            if bilingual:
+                orig_lines = [ln for ln in transcript.split('\n') if ln.strip()]
+                tr_lines = [ln for ln in translated.split('\n') if ln.strip()]
+                paired = []
+                for i, oline in enumerate(orig_lines):
+                    paired.append(oline)
+                    if i < len(tr_lines):
+                        paired.append(tr_lines[i])
+                content_out = '\n'.join(paired)
+            else:
+                content_out = translated
             with open(out_path, 'w', encoding='utf-8') as f:
-                f.write(f'标题: {title}\n翻译: {target}\n')
+                f.write(f'标题: {title}\n翻译: {target}{"（双语对照）" if bilingual else ""}\n')
                 f.write('=' * 40 + '\n')
-                f.write(translated)
+                f.write(content_out)
             eprint(f'📦 命中翻译缓存: {video_id}')
             return str(out_path), translated
 
@@ -207,12 +285,29 @@ def translate_transcript(transcript, video_id, title, target='zh', args=None):
 
     translated = result.get('translated_text', '')
     safe_title = safe_filename(title)
-    out_path = OUTPUT_DIR / f'{video_id}_{safe_title}_{target}.txt'
+    suffix = f'{target}-bi' if bilingual else target
+    out_path = OUTPUT_DIR / f'{video_id}_{safe_title}_{suffix}.txt'
+
+    # Bilingual: interleave original lines with translated lines
+    if bilingual:
+        orig_lines = [ln for ln in transcript.split('\n') if ln.strip()]
+        tr_lines = [ln for ln in translated.split('\n') if ln.strip()]
+        paired = []
+        for i, oline in enumerate(orig_lines):
+            paired.append(oline)
+            # Show translated line under its original (by index or timestamp)
+            if i < len(tr_lines):
+                paired.append(tr_lines[i])
+        content_out = '\n'.join(paired)
+    else:
+        content_out = translated
+
     with open(out_path, 'w', encoding='utf-8') as f:
-        f.write(f'标题: {title}\n翻译: {target}\n')
+        f.write(f'标题: {title}\n翻译: {target}{"（双语对照）" if bilingual else ""}\n')
         f.write('=' * 40 + '\n')
-        f.write(translated)
-    eprint(f'🌐 翻译完成 ({result.get("chunks", 1)} 块)')
+        f.write(content_out)
+    eprint(f'🌐 翻译完成 ({result.get("chunks", 1)} 块)'
+           f'{"，双语对照" if bilingual else ""}')
 
     # Cache the translation
     cache.set_translation(video_id, target, t_args.model, result)
@@ -265,7 +360,8 @@ def run_whisper_pipeline(video_id, video_url, title, whisper_model, device,
                          chunk_minutes=0, chunk_workers=0,
                          chapters=False, chapter_window_sec=60.0,
                          chapter_min=3, chapter_max=20, chapter_top_words=4,
-                         time_from=None, time_to=None):
+                         time_from=None, time_to=None,
+                         llm_titles=False, args=None):
     """Download audio and transcribe with Whisper."""
     safe_id = safe_video_id(video_url, fallback=video_id or 'video')
 
@@ -300,7 +396,8 @@ def run_whisper_pipeline(video_id, video_url, title, whisper_model, device,
             ch, ch_path = generate_chapters(
                 cached_text, safe_id, cached_title,
                 window_sec=chapter_window_sec, min_chapters=chapter_min,
-                max_chapters=chapter_max, top_words=chapter_top_words)
+                max_chapters=chapter_max, top_words=chapter_top_words,
+                llm_titles=llm_titles, args=args)
             if ch:
                 result["chapters"] = ch
                 result["chapters_file"] = ch_path
@@ -402,7 +499,8 @@ def run_whisper_pipeline(video_id, video_url, title, whisper_model, device,
         ch, ch_path = generate_chapters(
             transcript, safe_id, actual_title,
             window_sec=chapter_window_sec, min_chapters=chapter_min,
-            max_chapters=chapter_max, top_words=chapter_top_words)
+            max_chapters=chapter_max, top_words=chapter_top_words,
+            llm_titles=llm_titles, args=args)
         if ch:
             result["chapters"] = ch
             result["chapters_file"] = ch_path
@@ -566,6 +664,7 @@ def process_one_video(video, args, whisper_model, device,
                         min_chapters=args.chapter_min,
                         max_chapters=args.chapter_max,
                         top_words=args.chapter_top_words,
+                        llm_titles=args.llm_titles, args=args,
                     )
                     if chapters:
                         result["chapters"] = chapters
@@ -586,7 +685,8 @@ def process_one_video(video, args, whisper_model, device,
                 if args.translate:
                     tr_path, tr_text = translate_transcript(
                         transcript, video_id, title,
-                        target=args.translate_target, args=args)
+                        target=args.translate_target, args=args,
+                        bilingual=args.bilingual_translate)
                     if tr_path:
                         result["translated_file"] = tr_path
                         result["translated_char_count"] = len(tr_text)
@@ -638,7 +738,8 @@ def process_one_video(video, args, whisper_model, device,
         args.chunk_minutes, args.chunk_workers,
         args.chapters, args.chapter_window_sec,
         args.chapter_min, args.chapter_max, args.chapter_top_words,
-        args.time_from_sec, args.time_to_sec
+        args.time_from_sec, args.time_to_sec,
+        args.llm_titles, args
     )
 
 
@@ -759,6 +860,8 @@ def main():
                         help='Maximum chapters to detect')
     parser.add_argument('--chapter-top-words', type=int, default=4,
                         help='Keywords per auto-generated chapter title')
+    parser.add_argument('--llm-titles', action='store_true',
+                        help='Polish chapter titles via LLM (needs DEEPSEEK_API_KEY)')
     parser.add_argument('--format', default=None,
                         choices=['srt', 'vtt', 'lrc', 'txt'],
                         help='Convert subtitles to standard format (srt/vtt/lrc/txt)')
@@ -772,6 +875,8 @@ def main():
                         help='OpenAI-compatible API base URL (default: DeepSeek)')
     parser.add_argument('--translate-model', default=None,
                         help='Translation model (default: deepseek-chat)')
+    parser.add_argument('--bilingual-translate', action='store_true',
+                        help='With --translate: interleave original + translated lines')
     parser.add_argument('--from', dest='time_from', default=None,
                         help='Only process from this time (90, 01:30, 1:02:30)')
     parser.add_argument('--to', dest='time_to', default=None,

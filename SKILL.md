@@ -177,6 +177,12 @@ python SKILL_DIR/scripts/analyze_youtube.py "URL" --from 10:00 --to 20:00
 # Whisper transcription with [MM:SS] timestamps (v0.10)
 python SKILL_DIR/scripts/analyze_youtube.py "URL" --force-whisper --timestamps
 
+# LLM-polished chapter titles (needs DEEPSEEK_API_KEY; fluent Chinese titles)
+python SKILL_DIR/scripts/analyze_youtube.py "URL" --chapters --llm-titles
+
+# Bilingual translation: original + translated lines interleaved
+python SKILL_DIR/scripts/analyze_youtube.py "URL" --translate --bilingual-translate
+
 # Watch a channel for new videos (cron-friendly: empty output when nothing new)
 python SKILL_DIR/scripts/watch_channel.py --channel "@handle" --max 5
 python SKILL_DIR/scripts/watch_channel.py --channel "@handle" --max 5 --cookies cookies.txt

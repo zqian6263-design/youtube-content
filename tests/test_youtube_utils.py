@@ -666,6 +666,62 @@ def test_translation_cache_roundtrip():
     print('  ✅ test_translation_cache_roundtrip')
 
 
+def test_llm_titles_parse_without_timestamps():
+    """LLM often drops [MM:SS] — parser must accept bare 'N. title' lines."""
+    import types
+
+    import analyze_youtube as az
+
+    chapters = [
+        {"start_ts": "L0", "title": "kw1 / kw2"},
+        {"start_ts": "L184", "title": "kw3 / kw4"},
+    ]
+    fake_out = "1. 开场介绍\n2. 因果与关联"
+
+    # Monkeypatch call_llm in the translate module (llm_chapter_titles imports it)
+    import translate as tr_mod
+    orig_call = tr_mod.call_llm
+    def fake_call(api_key, base_url, model, system, user, timeout=120):
+        assert '因果' in system or 'zh' in system  # target-aware prompt
+        return fake_out
+    tr_mod.call_llm = fake_call
+    try:
+        polished = az.llm_chapter_titles(
+            chapters, 'Test Video', target='zh',
+            args=types.SimpleNamespace(translate_api_key='k', translate_base_url='u', translate_model='m'))
+        assert polished[0]['title'] == '开场介绍', polished
+        assert polished[1]['title'] == '因果与关联', polished
+    finally:
+        tr_mod.call_llm = orig_call
+    print('  ✅ test_llm_titles_parse_without_timestamps')
+
+
+def test_llm_titles_fallback_on_count_mismatch():
+    """If LLM returns wrong count, keep keyword titles."""
+    import types
+
+    import analyze_youtube as az
+
+    chapters = [
+        {"start_ts": "L0", "title": "kw1"},
+        {"start_ts": "L184", "title": "kw2"},
+        {"start_ts": "L460", "title": "kw3"},
+    ]
+    import translate as tr_mod
+    orig_call = tr_mod.call_llm
+    def fake_call(api_key, base_url, model, system, user, timeout=120):
+        return "1. only one\n2. two"  # wrong count
+    tr_mod.call_llm = fake_call
+    try:
+        polished = az.llm_chapter_titles(
+            chapters, 'Test', target='zh',
+            args=types.SimpleNamespace(translate_api_key='k', translate_base_url='u', translate_model='m'))
+        assert polished[0]['title'] == 'kw1'  # unchanged
+    finally:
+        tr_mod.call_llm = orig_call
+    print('  ✅ test_llm_titles_fallback_on_count_mismatch')
+
+
 def test_detect_chapters_full_pipeline():
     from chapters import detect_chapters, parse_subtitles
     # Simulate a 10-min video with 3 distinct topics
@@ -740,6 +796,8 @@ def run_all():
         test_format_segments_timestamps,
         test_format_segments_timestamps_with_offset,
         test_translation_cache_roundtrip,
+        test_llm_titles_parse_without_timestamps,
+        test_llm_titles_fallback_on_count_mismatch,
     ]
     failures = 0
     for t in tests:
