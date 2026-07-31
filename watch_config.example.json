@@ -2,5 +2,8 @@
   "channels": [
     {"name": "3Blue1Brown", "url": "@3blue1brown", "max": 3},
     {"name": "CS50", "url": "@cs50", "max": 3}
+  ],
+  "playlists": [
+    {"name": "CS50x 2026 Lectures", "url": "https://www.youtube.com/playlist?list=PLhQjrBD2T380hlTqAU8HfvVepCcjCqTg6", "max": 5}
   ]
 }

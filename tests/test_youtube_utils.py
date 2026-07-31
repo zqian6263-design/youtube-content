@@ -1047,6 +1047,55 @@ def test_playlist_flat_mode_no_title_field():
     print('  ✅ test_playlist_flat_mode_no_title_field')
 
 
+def test_video_jump_url():
+    import search
+    assert search.video_jump_url('5NgNicANyqM_Harvard Course.txt', '1:23:45') \
+        == 'https://youtu.be/5NgNicANyqM?t=5025'
+    assert search.video_jump_url('5NgNicANyqM_Harvard Course.txt', '03:05') \
+        == 'https://youtu.be/5NgNicANyqM?t=185'
+    # Notes (no video ID prefix) → no jump link
+    assert search.video_jump_url('01-Search.md', '12:34') is None
+    # No timestamp → base link
+    assert search.video_jump_url('5NgNicANyqM_x.txt', '') \
+        == 'https://youtu.be/5NgNicANyqM'
+    print('  ✅ test_video_jump_url')
+
+
+def test_pipeline_list_playlist_videos_mock():
+    """list_playlist_videos parses yt-dlp flat output and filters cache."""
+    import tempfile
+
+    import cache as cache_mod
+    import pipeline as pl
+
+    orig_run = pl.subprocess.run
+    orig_cache_cls = cache_mod.Cache
+
+    def fake_run(cmd, **kw):
+        import types
+        out = '1\tvid111\tPlaylist Video A\n2\tvid222\tPlaylist Video B\n'
+        return types.SimpleNamespace(returncode=0, stdout=out, stderr='')
+    pl.subprocess.run = fake_run
+
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            from pathlib import Path as _P
+            # list_playlist_videos does `from cache import Cache` internally →
+            # patch cache.Cache to use a temp db
+            cache_mod.Cache = lambda db_path=None: orig_cache_cls(db_path=_P(td) / 'test.db')
+            videos, cache = pl.list_playlist_videos(
+                {"url": "https://www.youtube.com/playlist?list=PLX", "max": 10},
+                'zh-Hans,zh-Hant,en')
+            assert len(videos) == 2
+            assert videos[0]['id'] == 'vid111'
+            assert videos[1]['title'] == 'Playlist Video B'
+            cache.close()
+    finally:
+        pl.subprocess.run = orig_run
+        cache_mod.Cache = orig_cache_cls
+    print('  ✅ test_pipeline_list_playlist_videos_mock')
+
+
 def test_detect_chapters_full_pipeline():
     from chapters import detect_chapters, parse_subtitles
     # Simulate a 10-min video with 3 distinct topics
@@ -1138,6 +1187,8 @@ def run_all():
         test_vector_search_no_index_graceful,
         test_playlist_title_parse,
         test_playlist_flat_mode_no_title_field,
+        test_video_jump_url,
+        test_pipeline_list_playlist_videos_mock,
     ]
     failures = 0
     for t in tests:

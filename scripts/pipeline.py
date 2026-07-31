@@ -82,6 +82,54 @@ def list_new_videos(channel_cfg: dict, languages: str) -> tuple:
     return new_videos, cache
 
 
+def list_playlist_videos(pl_cfg: dict, languages: str) -> tuple:
+    """
+    List videos for a playlist URL, filtering out cached ones.
+
+    Returns (videos, cache).
+    """
+    import subprocess as _sp
+
+    from cache import Cache
+
+    pl_url = pl_cfg.get('url', '')
+    pl_max = pl_cfg.get('max', 50)
+    if not pl_url.startswith('http'):
+        pl_url = f'https://www.youtube.com/playlist?list={pl_url.lstrip("list=")}'
+
+    cmd = ['yt-dlp', '--quiet', '--no-warnings', '--flat-playlist',
+           '--print', '%(playlist_index)s\t%(id)s\t%(title)s', pl_url]
+    try:
+        result = _sp.run(cmd, capture_output=True, text=True, timeout=120)
+    except _sp.TimeoutExpired:
+        return [], None
+    if result.returncode != 0:
+        return [], None
+
+    videos = []
+    for line in result.stdout.split('\n'):
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split('\t')
+        if len(parts) >= 2:
+            videos.append({"index": parts[0], "id": parts[1],
+                           "title": '\t'.join(parts[2:3]) if len(parts) > 2 else parts[1]})
+        if pl_max and len(videos) >= pl_max:
+            break
+
+    cache = Cache()
+    new_videos = []
+    for v in videos:
+        vid = v.get('id', '')
+        if not vid:
+            continue
+        if cache.get_subtitles(vid, languages, False):
+            continue
+        new_videos.append(v)
+    return new_videos, cache
+
+
 def process_video(video: dict, args, languages: str) -> dict:
     """Extract + enhance + archive a single video via analyze_youtube.py."""
     vid = video['id']
@@ -161,35 +209,53 @@ def main():
         with open(args.config, encoding='utf-8') as f:
             config = json.load(f)
         channels = config.get('channels', [])
+        playlists = config.get('playlists', [])
     except (OSError, json.JSONDecodeError) as e:
         eprint(f'❌ 配置加载失败: {e}')
         sys.exit(1)
-    if not channels:
-        eprint('❌ 配置中没有频道')
+    if not channels and not playlists:
+        eprint('❌ 配置中没有频道或播放列表')
         sys.exit(1)
 
-    all_results = []
-    processed = 0
-    for ch in channels:
-        ch_name = ch.get('name', ch.get('url', ''))
-        eprint(f'📡 [{ch_name}] 检查新视频...')
-        new_videos, cache = list_new_videos(ch, args.languages)
-        cache.close()
-        if not new_videos:
-            eprint('  ⏭ 无新视频')
-            continue
+    def process_source(source_name, source_type, new_videos):
+        """Shared per-source processing loop."""
         eprint(f'  🔎 {len(new_videos)} 个新视频')
         for v in new_videos:
             eprint(f'  📥 处理 {v["id"]} ({v.get("title", "")[:40]})...')
             result = process_video(v, args, args.languages)
-            result['channel'] = ch_name
+            result['source_name'] = source_name
+            result['source_type'] = source_type
             all_results.append(result)
-            processed += 1
             if result['status'] == 'success':
                 eprint(f'    ✅ {result.get("char_count", 0)} 字符'
                        f' ({result["elapsed_sec"]}s)')
             else:
                 eprint(f'    ⚠ {result.get("message", "失败")}')
+
+    all_results = []
+    # Channels (watch_channel engine)
+    for ch in channels:
+        ch_name = ch.get('name', ch.get('url', ''))
+        eprint(f'📡 [频道] {ch_name} 检查新视频...')
+        new_videos, cache = list_new_videos(ch, args.languages)
+        if cache:
+            cache.close()
+        if not new_videos:
+            eprint('  ⏭ 无新视频')
+            continue
+        process_source(ch_name, 'channel', new_videos)
+
+    # Playlists (flat-playlist engine)
+    for pl in playlists:
+        pl_name = pl.get('name', pl.get('url', ''))
+        eprint(f'📋 [播放列表] {pl_name} 检查新视频...')
+        new_videos, cache = list_playlist_videos(pl, args.languages)
+        if cache:
+            cache.close()
+        if not new_videos:
+            eprint('  ⏭ 无新视频')
+            continue
+        process_source(pl_name, 'playlist', new_videos)
 
     # Nothing new → silent (cron)
     if not all_results:
@@ -213,13 +279,19 @@ def main():
 
     # Report
     success = sum(1 for r in all_results if r['status'] == 'success')
+    src_types = []
+    if channels:
+        src_types.append(f'{len(channels)} 个频道')
+    if playlists:
+        src_types.append(f'{len(playlists)} 个播放列表')
     lines = ['# 🏭 知识库流水线', '',
              f'处理 {len(all_results)} 个视频（成功 {success}），'
-             f'来自 {len(channels)} 个频道', '']
+             f'来自 {" + ".join(src_types)}', '']
     for r in all_results:
         status_icon = '✅' if r['status'] == 'success' else '⚠️'
         lines.append(f'## {status_icon} {r["title"]}')
-        lines.append(f'- 频道: {r.get("channel", "")}')
+        kind = '📡 频道' if r.get('source_type') == 'channel' else '📋 播放列表'
+        lines.append(f'- {kind}: {r.get("source_name", "")}')
         lines.append(f'- 链接: https://youtu.be/{r["id"]}')
         if r['status'] == 'success':
             lines.append(f'- 来源: {r.get("source", "")} · {r.get("char_count", 0)} 字符')

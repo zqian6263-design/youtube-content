@@ -438,6 +438,28 @@ def format_results(result: dict) -> str:
     return '\n'.join(out)
 
 
+def video_jump_url(file_name: str, start_ts: str) -> str | None:
+    """
+    Build a YouTube jump link for a reference.
+
+    File names look like '<video_id>_<title>...' — extract the 11-char
+    video ID and convert MM:SS to seconds. Returns None if not applicable.
+    """
+    import re as _re
+    m = _re.match(r'([\w-]{11})_', file_name)
+    if not m:
+        return None
+    vid = m.group(1)
+    ts = start_ts or ''
+    if not ts or not ts.replace(':', '').isdigit():
+        return f'https://youtu.be/{vid}'
+    parts = ts.split(':')
+    seconds = 0
+    for p in parts:
+        seconds = seconds * 60 + int(p)
+    return f'https://youtu.be/{vid}?t={seconds}'
+
+
 def ask_llm(question: str, matches: list, db_path=None, verbose=True):
     """
     RAG-style Q&A: use search matches as context, answer via LLM.
@@ -485,6 +507,7 @@ def ask_llm(question: str, matches: list, db_path=None, verbose=True):
 
     references = [
         {"file": Path(m['path']).name, "start_ts": m.get('start_ts', ''),
+         "jump_url": video_jump_url(Path(m['path']).name, m.get('start_ts', '')),
          "text": m['text'][:150]}
         for m in matches[:5]
     ]
@@ -585,7 +608,12 @@ def main():
                 print(answer['answer'])
                 print('\n📎 参考片段:')
                 for ref in answer['references']:
-                    print(f"  [{ref['start_ts']}] {ref['file']}")
+                    jump = ref.get('jump_url') or ''
+                    if jump:
+                        print(f"  [{ref['start_ts']}] {ref['file']}")
+                        print(f"    ⏩ {jump}")
+                    else:
+                        print(f"  [{ref['start_ts']}] {ref['file']}")
         return
 
     if args.vector:
