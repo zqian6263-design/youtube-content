@@ -110,7 +110,14 @@ def try_transcript_api(video_id: str, languages: list, timestamps: bool,
         err = str(e)
         if 'blocked' in err.lower() or 'requestblocked' in err.lower() or 'ipblocked' in err.lower():
             return {"status": "blocked", "message": err[:200]}
-        if 'No transcripts' in err or 'TranscriptsDisabled' in err:
+        # No-caption detection: cover all known error phrasings
+        no_caption_markers = (
+            'No transcripts', 'TranscriptsDisabled',
+            'Subtitles are disabled', 'Could not retrieve a transcript',
+            'no captions', 'No captions', 'transcript not found',
+            'No transcript available',
+        )
+        if any(marker in err for marker in no_caption_markers):
             return {"status": "no_captions", "video_id": video_id}
         return {"status": "error", "message": err[:200]}
 
@@ -225,18 +232,21 @@ def main():
         if result.get('status') == 'success':
             emit_json(result)
         elif result.get('status') not in ('blocked', 'no_captions'):
-            emit_json(result, exit_code=1)
+            # Non-fatal error (e.g. API version mismatch): remember it,
+            # fall through to yt-dlp instead of exiting
+            first_error = result.get('message', '')
 
     # Strategy 2: yt-dlp subtitle extraction (fallback)
     result = try_ytdlp_subtitles(video_id, languages, args.timestamps)
     if result and result.get('status') == 'success':
         emit_json(result)
 
-    # Both failed
+    # Both failed → normalized no_captions (analyze shows Chinese guidance)
     emit_json({
         "status": "failed", "phase": "no_captions",
         "message": f"No captions available for video {video_id} (tried API + yt-dlp fallback)",
-        "video_id": video_id
+        "video_id": video_id,
+        "detail": first_error if 'first_error' in dir() else None
     }, exit_code=1)
 
 
