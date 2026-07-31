@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "youtube-content"
-version = "0.11.0"
+version = "0.12.0"
 description = "Extract captions/subtitles and transcribe audio from YouTube videos. No API key needed."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -51,6 +51,7 @@ packages = ["youtube_content"]
     "scripts/convert_subtitles.py",
     "scripts/translate.py",
     "scripts/watch_channel.py",
+    "scripts/webui.py",
 ]
 
 [tool.ruff]

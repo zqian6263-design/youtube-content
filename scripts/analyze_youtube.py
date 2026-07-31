@@ -415,6 +415,8 @@ def run_whisper_pipeline(video_id, video_url, title, whisper_model, device,
         audio_args += ['--start-sec', str(time_from)]
     if time_to is not None:
         audio_args += ['--end-sec', str(time_to)]
+    if getattr(args, 'cookies', None):
+        audio_args += ['--cookies', args.cookies]
     wo, we, wc = run_script(FETCH_AUDIO_PY, *audio_args, timeout=600)
 
     try:

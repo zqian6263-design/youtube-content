@@ -84,7 +84,8 @@ any authentication. Captions are fetched via YouTube's public endpoints.
 | `convert_subtitles.py` | Convert segments to SRT / VTT / LRC / TXT (players, editors, lyrics). |
 | `translate.py` | LLM subtitle translation (OpenAI-compatible API: DeepSeek/OpenAI). |
 | `watch_channel.py` | Watch channel/playlist for new videos → Markdown report (cron-friendly). |
-| `fetch_audio_youtube.py` | Download audio stream via yt-dlp, convert to WAV. Supports `--start-sec/--end-sec` section download. |
+| `webui.py` | Flask web UI: paste URL → extract/transcribe → view + download (needs flask). |
+| `fetch_audio_youtube.py` | Download audio stream via yt-dlp, convert to WAV. Supports `--start-sec/--end-sec`, cookies, auto-retry, bot/age detection. |
 | `youtube_utils.py` | Shared utilities: ID parsing, .env loading, VTT parsing, GPU detection. |
 | `cache.py` | SQLite cache (subtitles + transcripts + translations, 7-day TTL). |
 | `tests/test_youtube_utils.py` | 45 unit tests. Run: `python tests/test_youtube_utils.py` |
@@ -186,6 +187,9 @@ python SKILL_DIR/scripts/analyze_youtube.py "URL" --translate --bilingual-transl
 # Watch a channel for new videos (cron-friendly: empty output when nothing new)
 python SKILL_DIR/scripts/watch_channel.py --channel "@handle" --max 5
 python SKILL_DIR/scripts/watch_channel.py --channel "@handle" --max 5 --cookies cookies.txt
+
+# Web UI (needs: pip install flask)
+python SKILL_DIR/scripts/webui.py --port 8080   # → http://127.0.0.1:8080
 
 # Bilingual output (zh primary + en secondary, timestamp-aligned)
 python SKILL_DIR/scripts/analyze_youtube.py "URL" --languages zh-Hans,en --bilingual --timestamps
