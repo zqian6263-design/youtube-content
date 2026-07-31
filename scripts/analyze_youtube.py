@@ -893,6 +893,16 @@ def process_bilibili(video: str, args) -> dict:
     from youtube_utils import load_env
     load_env()
 
+    # Check subtitle cache first (Bilibili API is slow & flaky)
+    from cache import Cache
+    cache = Cache()
+    try:
+        cached = cache.get_subtitles(video, 'bilibili', False)
+        if cached and cached.get('status') == 'success':
+            return cached
+    finally:
+        cache.close()
+
     bridge_py = SCRIPT_DIR / 'bilibili_bridge.py'
     extra = []
     if getattr(args, 'whisper', False):
@@ -909,6 +919,14 @@ def process_bilibili(video: str, args) -> dict:
                                                         "message": so[:200]}
     except json.JSONDecodeError:
         result = {"status": "failed", "message": f"bridge 输出解析失败: {so[:200]}"}
+
+    if result.get('status') == 'success':
+        # Cache successful subtitle results (reuse the shared cache table)
+        cache = Cache()
+        try:
+            cache.set_subtitles(video, 'bilibili', False, result)
+        finally:
+            cache.close()
 
     if result.get('status') != 'success':
         return result

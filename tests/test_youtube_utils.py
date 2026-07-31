@@ -1164,29 +1164,20 @@ def test_bilibili_cookies_file():
     print('  ✅ test_bilibili_cookies_file')
 
 
-def test_verify_subtitle_match_mock():
-    """Subtitle-vs-title consistency check flags mismatches."""
-    import bilibili_bridge as bb
 
-    # Mock the LLM call (patch translate.call_llm — verify imports it)
-    import translate
-    orig = translate.call_llm
-
-    def fake_call_llm(key, base, model, system, user, timeout=60):
-        if 'RAG' in user:
-            return '{"match": false, "reason": "字幕为电竞内容，与RAG主题无关"}'
-        return '{"match": true, "reason": "一致"}'
-    translate.call_llm = fake_call_llm
-    try:
-        m1, r1 = bb.verify_subtitle_match('7分钟了解10种RAG策略',
-                                          'WBG对阵LNG BP风格差异明显')
-        assert m1 is False
-        assert 'RAG' in r1 or '电竞' in r1
-        m2, _ = bb.verify_subtitle_match('蜘蛛侠剧情回顾', '蜘蛛侠崭新之日上映')
-        assert m2 is True
-    finally:
-        translate.call_llm = orig
-    print('  ✅ test_verify_subtitle_match_mock')
+def test_subtitle_mismatch_detection():
+    """Bilibili AI-subtitle mismatch guard."""
+    from bilibili_bridge import subtitle_mismatch
+    # Matching: title keywords appear in transcript
+    assert subtitle_mismatch('RAG 工作机制详解',
+                             '本文讲解 RAG 检索增强生成的原理') is None
+    # Mismatch: title keywords absent (wrong video's subs)
+    r = subtitle_mismatch('RAG 工作机制详解',
+                          '无法改变现状 那就享受当下 别为了打翻的牛奶而哭泣')
+    assert r is not None and 'rag' in r
+    # Empty inputs → None
+    assert subtitle_mismatch('', '') is None
+    print('  ✅ test_subtitle_mismatch_detection')
 
 
 def test_detect_chapters_full_pipeline():
@@ -1286,7 +1277,7 @@ def run_all():
         test_bilibili_extract_bvid,
         test_analyze_detect_bilibili,
         test_bilibili_cookies_file,
-        test_verify_subtitle_match_mock,
+        test_subtitle_mismatch_detection,
     ]
     failures = 0
     for t in tests:

@@ -67,6 +67,42 @@ def run(cmd, timeout=600):
     return result
 
 
+def subtitle_mismatch(title: str, transcript: str) -> str | None:
+    """
+    Detect Bilibili AI-subtitle mismatch (a known Bilibili data bug where
+    the returned subtitle belongs to a DIFFERENT video).
+
+    Extracts meaningful keywords from the title (ASCII words + 2+ char
+    Chinese tokens) and checks whether any appear in the transcript.
+    Returns a reason string if mismatch is likely, else None.
+    """
+    import re as _re
+
+    if not title or not transcript:
+        return None
+    stop = {'机制', '详解', '工作', '流程', '教程', '视频', '什么', '如何',
+            '一个', '背后', '全', '技术', '知识', '介绍', '讲解'}
+    text_lower = transcript.lower()
+    # ASCII keywords (RAG, API, LLM, ...)
+    ascii_kws = [w.lower() for w in _re.findall(r'[A-Za-z]{2,}', title)
+                 if w.lower() not in {'the', 'and', 'for', 'with'}]
+    # Chinese keywords: 2-4 char tokens
+    zh_kws = []
+    for m in _re.findall(r'[\u4e00-\u9fff]{2,}', title):
+        for i in range(0, len(m) - 1, 2):
+            tok = m[i:i+2]
+            if tok not in stop and len(tok) == 2:
+                zh_kws.append(tok)
+    if not ascii_kws and not zh_kws:
+        return None
+    # If the title's keywords appear at least once → likely consistent
+    hits = [kw for kw in ascii_kws + zh_kws if kw in text_lower]
+    if hits:
+        return None
+    return (f'字幕与标题不匹配（标题关键词 {", ".join((ascii_kws + zh_kws)[:3])} '
+            f'未在字幕中出现），疑似 B站 AI 字幕错配')
+
+
 def fetch_subtitles(bvid: str) -> dict:
     """Try CC subtitles via the bilibili-content skill, with retries.
 
@@ -231,6 +267,7 @@ def main():
         sys.exit(1)
 
     # Step 1: CC subtitles (skip if --force-whisper)
+    # Step 1: CC subtitles (skip if --force-whisper)
     if not args.force_whisper:
         sub = fetch_subtitles(bvid)
         has_subs = (sub.get('has_subtitles') is True
@@ -238,34 +275,34 @@ def main():
         transcript = (sub.get('transcript') or sub.get('subtitles')
                       or sub.get('text') or '') if has_subs else ''
         if has_subs and transcript:
-            # Verify AI-subtitle content matches the video title
-            # (bilibili AI subtitles intermittently mismatch)
-            if not getattr(args, 'no_verify', False) and transcript:
-                matched, reason = verify_subtitle_match(
-                    sub.get('title') or bvid, transcript)
-                if not matched:
+            # Guard against Bilibili AI-subtitle mismatch (a known
+            # Bilibili data bug: returned subs belong to another video).
+            mismatch = subtitle_mismatch(sub.get('title') or bvid, transcript)
+            if mismatch:
+                if not args.whisper:
                     print(json.dumps({
                         "status": "needs_confirmation",
                         "video_id": bvid,
-                        "message": ("⚠ 检测到字幕内容与视频标题不匹配"
-                                    "（B站 AI 字幕错配）。建议用 Whisper 转写。"),
-                        "detail": reason,
+                        "message": "⚠ " + mismatch + "。建议用 Whisper 转写。",
+                        "detail": mismatch[:150],
                         "next_command": f"--whisper {bvid}",
                         "next_flags": ["--whisper"],
                     }, ensure_ascii=False))
                     return
-            result = {
-                "status": "success",
-                "source": "bilibili_caption",
-                "video_id": bvid,
-                "title": sub.get('title') or bvid,
-                "transcript": transcript,
-                "char_count": len(transcript),
-                "message": "B站字幕已提取",
-            }
-            print(json.dumps(result, ensure_ascii=False))
-            return
-        # Cookie/subtitle errors: fall through to whisper when requested
+                transcript = ''  # fall through to Whisper
+            else:
+                result = {
+                    "status": "success",
+                    "source": "bilibili_caption",
+                    "video_id": bvid,
+                    "title": sub.get('title') or bvid,
+                    "transcript": transcript,
+                    "char_count": len(transcript),
+                    "message": "B站字幕已提取",
+                }
+                print(json.dumps(result, ensure_ascii=False))
+                return
+        # No subtitles (or API failure): fall through to whisper when requested
         if not args.whisper:
             print(json.dumps({
                 "status": "needs_confirmation",
@@ -278,6 +315,7 @@ def main():
             }))
             return
 
+    # Step 2: Whisper transcription
     # Step 2: Whisper transcription
     model_dir = Path(os.path.expanduser(args.model_dir))
     model_dir.mkdir(parents=True, exist_ok=True)
