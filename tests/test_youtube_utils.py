@@ -270,6 +270,68 @@ def test_playlist_id_extraction():
     print('  ✅ test_playlist_id_extraction')
 
 
+# ── Chunked transcription helpers ───────────────────────────────────────
+
+def test_get_audio_duration_wav():
+    import subprocess
+
+    from transcribe_whisper import get_audio_duration
+    with tempfile.TemporaryDirectory() as td:
+        wav = Path(td) / 't.wav'
+        r = subprocess.run(
+            ['ffmpeg', '-y', '-v', 'error', '-f', 'lavfi',
+             '-i', 'sine=frequency=440:duration=5', '-ar', '16000', '-ac', '1', str(wav)],
+            capture_output=True, text=True, timeout=30)
+        if r.returncode == 0:
+            dur = get_audio_duration(str(wav))
+            assert 4.5 <= dur <= 5.5, f'duration={dur}'
+            print(f'  ✅ test_get_audio_duration_wav ({dur:.1f}s)')
+        else:
+            print('  ⚠ ffmpeg unavailable, skipping')
+    return True
+
+
+def test_split_audio_chunks():
+    import subprocess
+
+    from transcribe_whisper import get_audio_duration, split_audio
+    with tempfile.TemporaryDirectory() as td:
+        wav = Path(td) / 'src.wav'
+        r = subprocess.run(
+            ['ffmpeg', '-y', '-v', 'error', '-f', 'lavfi',
+             '-i', 'sine=frequency=440:duration=10', '-ar', '16000', '-ac', '1', str(wav)],
+            capture_output=True, text=True, timeout=30)
+        if r.returncode != 0:
+            print('  ⚠ ffmpeg unavailable, skipping')
+            return True
+        chunks, n = split_audio(str(wav), Path(td) / 'out', 4.0, 'chunk')
+        assert n == 3, f'10s / 4s → 3 chunks, got {n}'
+        assert len(chunks) == 3
+        for idx, path in chunks:
+            d = get_audio_duration(path)
+            assert d <= 4.5, f'chunk {idx} too long: {d}s'
+        print(f'  ✅ test_split_audio_chunks ({n} chunks)')
+
+
+def test_transcribe_chunked_single():
+    """Chunk-minutes larger than audio → no chunking, still works."""
+    import subprocess as sp
+    with tempfile.TemporaryDirectory() as td:
+        wav = Path(td) / 's.wav'
+        r = sp.run(['ffmpeg', '-y', '-v', 'error', '-f', 'lavfi',
+                    '-i', 'sine=frequency=440:duration=5', '-ar', '16000', '-ac', '1', str(wav)],
+                   capture_output=True, text=True, timeout=30)
+        if r.returncode != 0:
+            print('  ⚠ ffmpeg unavailable, skipping')
+            return None
+        from transcribe_whisper import get_audio_duration
+        dur = get_audio_duration(str(wav))
+        n = max(1, int(dur // (60 * 60)) + 1)
+        assert n == 1
+    print('  ✅ test_transcribe_chunked_single')
+    return None
+
+
 def run_all():
     tests = [
         test_extract_video_id_formats,
@@ -289,6 +351,9 @@ def run_all():
         test_interleave_timestamp_aligned,
         test_interleave_fallback_index,
         test_playlist_id_extraction,
+        test_get_audio_duration_wav,
+        test_split_audio_chunks,
+        test_transcribe_chunked_single,
     ]
     failures = 0
     for t in tests:

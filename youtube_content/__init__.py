@@ -1,3 +1,3 @@
 """youtube-content — Extract captions and transcribe audio from YouTube videos."""
 
-__version__ = "0.2.0"
+__version__ = "0.4.0"

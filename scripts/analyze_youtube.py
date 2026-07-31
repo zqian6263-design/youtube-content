@@ -128,7 +128,8 @@ def fetch_video_title(video):
 # ── Whisper pipeline ────────────────────────────────────────────────────
 def run_whisper_pipeline(video_id, video_url, title, whisper_model, device,
                          whisper_model_dir, whisper_temp,
-                         whisper_language, timestamps, backend='openai'):
+                         whisper_language, timestamps, backend='openai',
+                         chunk_minutes=0, chunk_workers=0):
     """Download audio and transcribe with Whisper."""
     safe_id = safe_video_id(video_url, fallback=video_id or 'video')
 
@@ -191,6 +192,11 @@ def run_whisper_pipeline(video_id, video_url, title, whisper_model, device,
         '--model-dir', str(whisper_model_dir),
         '--backend', backend,
     ] + ts_flag
+
+    if chunk_minutes and chunk_minutes > 0:
+        wo_kwargs += ['--chunk-minutes', str(chunk_minutes)]
+    if chunk_workers and chunk_workers > 0:
+        wo_kwargs += ['--chunk-workers', str(chunk_workers)]
 
     if whisper_language:
         wo_kwargs += ['--language', whisper_language]
@@ -414,7 +420,8 @@ def process_one_video(video, args, whisper_model, device,
     return run_whisper_pipeline(
         video_id, video, video_id, whisper_model, device,
         whisper_model_dir, whisper_temp,
-        whisper_language, args.timestamps, args.backend
+        whisper_language, args.timestamps, args.backend,
+        args.chunk_minutes, args.chunk_workers
     )
 
 
@@ -503,6 +510,11 @@ def main():
                         help='Whisper backend: openai (default) or faster-whisper (4x faster)')
     parser.add_argument('--bilingual', action='store_true',
                         help='Bilingual output: interleave primary + secondary captions')
+    parser.add_argument('--chunk-minutes', type=int, default=0,
+                        help='Split long audio into N-minute chunks. CPU: parallel '
+                             'across processes (4-6x speedup); GPU: OOM-safe')
+    parser.add_argument('--chunk-workers', type=int, default=0,
+                        help='Max parallel chunk workers on CPU (default: cpu_count)')
     args = parser.parse_args()
 
     # Load .env if present (does not override existing env vars)

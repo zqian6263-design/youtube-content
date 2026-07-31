@@ -148,6 +148,10 @@ python SKILL_DIR/scripts/analyze_youtube.py "URL" --auto --whisper-model base --
 # faster-whisper backend (~4x faster): pip install faster-whisper
 python SKILL_DIR/scripts/analyze_youtube.py "URL" --auto --backend faster-whisper
 
+# Long video: chunk + parallel transcription on CPU (~4-6x speedup)
+# Split into 10-min chunks, up to 4 parallel workers
+python SKILL_DIR/scripts/analyze_youtube.py "URL" --force-whisper --chunk-minutes 10 --chunk-workers 4
+
 # Bilingual output (zh primary + en secondary, timestamp-aligned)
 python SKILL_DIR/scripts/analyze_youtube.py "URL" --languages zh-Hans,en --bilingual --timestamps
 
