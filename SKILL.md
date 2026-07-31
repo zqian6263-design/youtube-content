@@ -87,6 +87,7 @@ any authentication. Captions are fetched via YouTube's public endpoints.
 | `webui.py` | Flask web UI: paste URL → extract/transcribe → view + download (needs flask). |
 | `search.py` | Full-text search (FTS5 + CJK bigram) and `--ask` RAG Q&A over subtitles/notes. |
 | `feishu_bot.py` | Feishu bot: send a YouTube link → get caption/transcript reply (needs app credentials). |
+| `pipeline.py` | One-command pipeline: watch → extract → enhance → archive → reindex → report. |
 | `fetch_audio_youtube.py` | Download audio stream via yt-dlp, convert to WAV. Supports `--start-sec/--end-sec`, cookies, auto-retry, bot/age detection. |
 | `youtube_utils.py` | Shared utilities: ID parsing, .env loading, VTT parsing, GPU detection. |
 | `cache.py` | SQLite cache (subtitles + transcripts + translations, 7-day TTL). |
@@ -192,6 +193,10 @@ python SKILL_DIR/scripts/watch_channel.py --channel "@handle" --max 5 --cookies 
 
 # Multi-channel weekly report (config: watch_config.example.json)
 python SKILL_DIR/scripts/watch_channel.py --config watch_config.json --weekly
+
+# One-command knowledge-base pipeline (watch → extract → enhance → archive → reindex)
+python SKILL_DIR/scripts/pipeline.py --config watch_config.json \
+    --archive "C:/Users/me/Obsidian/视频笔记" --chapters --translate --reindex
 
 # Web UI (needs: pip install flask)
 python SKILL_DIR/scripts/webui.py --port 8080   # → http://127.0.0.1:8080

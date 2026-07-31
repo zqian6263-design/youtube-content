@@ -909,6 +909,47 @@ def test_watch_process_channel_mock():
     print('  ✅ test_watch_process_channel_mock')
 
 
+def test_pipeline_extract_json():
+    import pipeline as pl
+    out = 'progress line\n{"status": "success", "char_count": 100}'
+    data = pl.extract_json(out)
+    assert data['status'] == 'success'
+    assert data['char_count'] == 100
+    # No JSON → empty dict
+    assert pl.extract_json('no json here') == {}
+    # Invalid JSON after { → empty dict
+    assert pl.extract_json('{broken') == {}
+    print('  ✅ test_pipeline_extract_json')
+
+
+def test_pipeline_process_video_mock():
+    """process_video delegates to analyze_youtube and parses its JSON."""
+    import types
+
+    import pipeline as pl
+
+    # Mock run() to return a fake analyze result
+    orig_run = pl.run
+    def fake_run(cmd, timeout=1800):
+        assert cmd[0] == sys.executable
+        assert str(pl.ANALYZE_PY) in cmd
+        # --archive flag passed through
+        assert '--archive' in cmd
+        return ('{"status": "success", "source": "caption", "char_count": 500, '
+                '"chapters": [{"start_ts": "00:00", "title": "Intro"}]}'), 0
+    pl.run = fake_run
+    try:
+        args = types.SimpleNamespace(chapters=True, translate=False, archive='C:/tmp/notes')
+        result = pl.process_video({"id": "vidAAA", "title": "Test"}, args, 'zh-Hans,zh-Hant,en')
+        assert result['status'] == 'success'
+        assert result['char_count'] == 500
+        assert result['chapters_count'] == 1
+        assert result['title'] == 'Test'
+    finally:
+        pl.run = orig_run
+    print('  ✅ test_pipeline_process_video_mock')
+
+
 def test_detect_chapters_full_pipeline():
     from chapters import detect_chapters, parse_subtitles
     # Simulate a 10-min video with 3 distinct topics
@@ -994,6 +1035,8 @@ def run_all():
         test_watch_load_config,
         test_watch_load_config_invalid,
         test_watch_process_channel_mock,
+        test_pipeline_extract_json,
+        test_pipeline_process_video_mock,
     ]
     failures = 0
     for t in tests:
