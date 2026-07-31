@@ -1,2 +1,0 @@
-[console_scripts]
-youtube-content = youtube_content.cli:main
