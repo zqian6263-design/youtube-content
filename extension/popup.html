@@ -31,15 +31,11 @@ const statusEl = document.getElementById('status');
 document.getElementById('run').addEventListener('click', async () => {
   let url = document.getElementById('url').value.trim();
   if (!url) {
-    // Try current tab (YouTube or Bilibili)
+    // Try current tab
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    let m = tab.url.match(/[?&]v=([\w-]{11})/);
+    const m = tab.url.match(/[?&]v=([\w-]{11})/);
     if (m) url = m[1];
-    else {
-      m = tab.url.match(/BV[a-zA-Z0-9]+/);
-      if (m) url = m[0];
-      else { statusEl.textContent = '⚠ 当前页面不是 YouTube/B站 视频页'; statusEl.className = 'err'; return; }
-    }
+    else { statusEl.textContent = '⚠ 当前页面不是 YouTube 视频页'; statusEl.className = 'err'; return; }
   }
   statusEl.textContent = '⏳ 处理中...';
   statusEl.className = '';

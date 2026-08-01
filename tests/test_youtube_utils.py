@@ -1107,84 +1107,8 @@ def test_clean_transcript_text():
     print('  ✅ test_clean_transcript_text')
 
 
-def test_bilibili_extract_bvid():
-    import bilibili_bridge as bb
-    assert bb.extract_bvid('BV1BU3F6fELc') == 'BV1BU3F6fELc'
-    assert bb.extract_bvid('https://www.bilibili.com/video/BV1xx411c7mD') == 'BV1xx411c7mD'
-    assert bb.extract_bvid('https://b23.tv/BV1BU3F6fELc?share') == 'BV1BU3F6fELc'
-    assert bb.extract_bvid('not a bv id') is None
-    print('  ✅ test_bilibili_extract_bvid')
 
 
-def test_analyze_detect_bilibili():
-    """analyze routes bilibili URLs/BVs to the bridge."""
-    import re
-    assert re.search(r'BV[a-zA-Z0-9]+', 'BV1BU3F6fELc')
-    assert re.search(r'BV[a-zA-Z0-9]+', 'https://www.bilibili.com/video/BV1xx')
-    assert 'bilibili.com' in 'https://www.bilibili.com/video/BV1xx'
-    # YouTube IDs must NOT match
-    assert not re.search(r'BV[a-zA-Z0-9]+', 'dQw4w9WgXcQ')
-    print('  ✅ test_analyze_detect_bilibili')
-
-
-def test_bilibili_cookies_file():
-    """Netscape cookie file generated from skill .env (or None gracefully)."""
-    import os
-    import tempfile
-
-    import pipeline as pl
-
-    # Mock skill dir with a fake .env
-    with tempfile.TemporaryDirectory() as td:
-        env = Path(td) / '.env'
-        env.write_text('BILIBILI_SESSDATA=abc123\nBILIBILI_BILI_JCT=xyz\n'
-                       'BILIBILI_DEDE_USERID=123\n', encoding='utf-8')
-        orig_env = os.environ.get('BILIBILI_SKILL_DIR')
-        os.environ['BILIBILI_SKILL_DIR'] = td
-        try:
-            p = pl._bilibili_cookies_file()
-            assert p, "cookies file should be generated"
-            txt = Path(p).read_text(encoding='utf-8')
-            assert 'SESSDATA	abc123' in txt
-            assert 'bili_jct	xyz' in txt
-            Path(p).unlink(missing_ok=True)
-        finally:
-            if orig_env:
-                os.environ['BILIBILI_SKILL_DIR'] = orig_env
-            else:
-                os.environ.pop('BILIBILI_SKILL_DIR', None)
-
-        # Missing .env → None
-        with tempfile.TemporaryDirectory() as td2:
-            os.environ['BILIBILI_SKILL_DIR'] = td2
-            try:
-                assert pl._bilibili_cookies_file() is None
-            finally:
-                os.environ.pop('BILIBILI_SKILL_DIR', None)
-    print('  ✅ test_bilibili_cookies_file')
-
-
-
-def test_subtitle_mismatch_detection():
-    """Bilibili AI-subtitle mismatch guard."""
-    from bilibili_bridge import subtitle_mismatch
-    # Matching: ASCII + Chinese keywords appear
-    assert subtitle_mismatch('RAG 工作机制详解',
-                             '本文讲解 RAG 的机制与检索增强生成的原理') is None
-    # Mismatch: ASCII keyword absent (wrong video's subs)
-    r = subtitle_mismatch('RAG 工作机制详解',
-                          '无法改变现状 那就享受当下 别为了打翻的牛奶而哭泣')
-    assert r is not None and 'rag' in r
-    # Mismatch: ASCII present but no Chinese keyword (generic-word bypass)
-    r2 = subtitle_mismatch('【RAG-全集】最适合新手的大模型RAG入门课程',
-                           '看完评测 苹果内忧外患 但模型结论一致')
-    assert r2 is not None
-    # Matching: real RAG content with rag + 模型
-    assert subtitle_mismatch('【RAG-全集】最适合新手的大模型RAG入门课程',
-                             '再聪明的模型也回答不了问题 RAG 是一套架构') is None
-    # Empty inputs → None
-    assert subtitle_mismatch('', '') is None
-    print('  ✅ test_subtitle_mismatch_detection')
 
 
 def test_detect_chapters_full_pipeline():
@@ -1281,10 +1205,6 @@ def run_all():
         test_video_jump_url,
         test_pipeline_list_playlist_videos_mock,
         test_clean_transcript_text,
-        test_bilibili_extract_bvid,
-        test_analyze_detect_bilibili,
-        test_bilibili_cookies_file,
-        test_subtitle_mismatch_detection,
     ]
     failures = 0
     for t in tests:

@@ -406,8 +406,7 @@ def api_quick():
     if data.get('status') != 'success':
         return jsonify(data)
 
-    # Attach transcript text (skip header; prefer inline transcript for
-    # bilibili path which does not write a transcript_file)
+    # Attach transcript text (skip header; fall back to inline transcript)
     text = data.get('transcript', '')
     if not text:
         try:
