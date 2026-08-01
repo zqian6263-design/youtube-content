@@ -29,6 +29,32 @@ except ImportError:
 
 app = Flask(__name__)
 
+
+def parse_json_payload(out: str, default_message: str = '无输出',
+                       timeout_msg: str = '处理超时') -> dict:
+    """Extract the JSON payload from analyze_youtube subprocess output.
+
+    The script prints progress to stderr and a single JSON object to stdout.
+    Robustly finds the first '{' and parses from there. On any failure returns
+    a well-formed ``{"status": "failed", "message": ...}`` dict so callers
+    never touch bare exceptions.
+
+    Used by /api/quick and /api/analyze so their parsing logic is identical
+    and unit-testable.
+    """
+    idx = out.find('{')
+    if idx < 0:
+        return {'status': 'failed', 'message': (out[:200] or default_message)}
+    try:
+        return json.loads(out[idx:])
+    except json.JSONDecodeError:
+        return {'status': 'failed', 'message': '输出解析失败'}
+
+
+def truncate_text(text: str, max_chars: int) -> str:
+    """Truncate transcript text to max_chars for API responses."""
+    return text[:max_chars]
+
 HTML = '''<!DOCTYPE html>
 <html lang="zh">
 <head>
@@ -377,17 +403,12 @@ def api_quick():
         return jsonify({"status": "failed", "message": "缺少 url 参数"}), 400
 
     cmd = [sys.executable, str(ANALYZE_PY), url, '--chapters']
+    data = {'status': 'failed', 'message': '无输出'}
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
-        out = result.stdout.strip()
-        idx = out.find('{')
-        if idx < 0:
-            return jsonify({"status": "failed", "message": out[:200] or "无输出"})
-        data = json.loads(out[idx:])
+        data = parse_json_payload(result.stdout.strip())
     except subprocess.TimeoutExpired:
-        return jsonify({"status": "failed", "message": "处理超时"})
-    except json.JSONDecodeError:
-        return jsonify({"status": "failed", "message": "输出解析失败"})
+        data['message'] = '处理超时'
 
     # No captions → optional Whisper fallback (slow: minutes)
     if data.get('status') == 'needs_confirmation' and do_whisper:
@@ -399,7 +420,7 @@ def api_quick():
             if widx >= 0:
                 data = json.loads(wout[widx:])
         except subprocess.TimeoutExpired:
-            return jsonify({"status": "failed", "message": "Whisper 转写超时（视频过长）"})
+            data = {'status': 'failed', 'message': 'Whisper 转写超时（视频过长）'}
         except json.JSONDecodeError:
             pass
 
@@ -416,7 +437,7 @@ def api_quick():
         except OSError:
             pass
     else:
-        text = text[:max_chars]
+        text = truncate_text(text, max_chars)
 
     # LLM summary (Simplified Chinese, cached) when requested
     summary = None
@@ -459,15 +480,9 @@ def api_analyze():
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
         out = result.stdout.strip()
         # The script prints progress to stderr and JSON to stdout
-        idx = out.find('{')
-        if idx >= 0:
-            payload = json.loads(out[idx:])
-        else:
-            payload = {"status": "failed", "message": out[:300] or "无输出"}
+        payload = parse_json_payload(out, default_message='无输出')
     except subprocess.TimeoutExpired:
-        payload = {"status": "failed", "message": "处理超时（>1小时）"}
-    except json.JSONDecodeError:
-        payload = {"status": "failed", "message": f"输出解析失败: {out[:200]}"}
+        payload = {'status': 'failed', 'message': '处理超时（>1小时）'}
 
     # Attach transcript text for display
     if payload.get('status') == 'success' and payload.get('transcript_file'):
@@ -509,6 +524,27 @@ def _search_index_path():
     return str(index_path())
 
 
+def run_search(q: str, mode: str = 'fts', limit: int = 10,
+               file_filter: str | None = None) -> dict:
+    """Dispatch a search by mode and enrich matches with jump URLs.
+
+    Pure logic behind GET /api/search (and reusable by tests). Returns the
+    search result dict; raises on search-backend failure.
+    """
+    sys.path.insert(0, str(SCRIPT_DIR))
+    from search import search, vector_search, video_jump_url
+    from pathlib import Path as _P
+
+    if mode == 'vector':
+        result = vector_search(q, limit=limit, context=1, file_filter=file_filter)
+    else:
+        result = search(q, limit=limit, context=1, file_filter=file_filter)
+    for m in result.get('matches', []):
+        fname = _P(m['path']).name
+        m['jump_url'] = video_jump_url(fname, m.get('start_ts', ''))
+    return result
+
+
 @app.route('/api/search')
 def api_search():
     """GET /api/search?q=...&mode=fts|vector&limit=N&file=..."""
@@ -520,20 +556,7 @@ def api_search():
         return jsonify({"status": "failed", "message": "缺少 q 参数"}), 400
 
     try:
-        sys.path.insert(0, str(SCRIPT_DIR))
-        from search import search, vector_search
-        if mode == 'vector':
-            result = vector_search(q, limit=limit, context=1, file_filter=file_filter)
-        else:
-            result = search(q, limit=limit, context=1, file_filter=file_filter)
-        # Add jump URLs
-        from pathlib import Path as _P
-
-        from search import video_jump_url
-        for m in result.get('matches', []):
-            fname = _P(m['path']).name
-            m['jump_url'] = video_jump_url(fname, m.get('start_ts', ''))
-        return jsonify(result)
+        return jsonify(run_search(q, mode=mode, limit=limit, file_filter=file_filter))
     except Exception as e:
         return jsonify({"status": "failed", "message": str(e)[:200]}), 500
 

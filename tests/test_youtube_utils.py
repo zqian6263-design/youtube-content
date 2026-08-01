@@ -1175,6 +1175,116 @@ def test_detect_chapters_full_pipeline():
     print(f'  ✅ test_detect_chapters_full_pipeline ({len(chapters)} chapters)')
 
 
+# ── webui parsing (parse_json_payload / truncate_text / run_search) ──────
+
+def test_webui_parse_json_payload():
+    import webui
+    # clean output: progress on stderr-only is not present; find first '{'
+    out = 'line1\nline2\n{"status": "success", "char_count": 100}'
+    data = webui.parse_json_payload(out)
+    assert data['status'] == 'success'
+    assert data['char_count'] == 100
+    # junk before JSON (progress lines) is skipped from the first '{'
+    out2 = '[01:23] some spoken text {"status": "success"}'
+    assert webui.parse_json_payload(out2)['status'] == 'success'
+    # no '{' → failed with the output content as message (truncated to 200)
+    assert webui.parse_json_payload('no json at all') == \
+        {'status': 'failed', 'message': 'no json at all'}
+    # empty output → failed with default message
+    assert webui.parse_json_payload('') == \
+        {'status': 'failed', 'message': '无输出'}
+    # no '{' with content → failed with the content truncated to 200 chars
+    r = webui.parse_json_payload('x' * 400)
+    assert r['status'] == 'failed' and len(r['message']) == 200
+    # broken JSON after '{' → failed parse message
+    assert webui.parse_json_payload('{broken')['message'] == '输出解析失败'
+    # custom default message respected
+    assert webui.parse_json_payload('', default_message='空')['message'] == '空'
+    print('  ✅ test_webui_parse_json_payload')
+
+
+def test_webui_truncate_text():
+    import webui
+    assert webui.truncate_text('hello world', 5) == 'hello'
+    assert webui.truncate_text('short', 100) == 'short'
+    assert webui.truncate_text('', 10) == ''
+    print('  ✅ test_webui_truncate_text')
+
+
+def test_webui_run_search_fts_and_vector():
+    """run_search dispatches fts vs vector and enriches jump URLs."""
+    import os
+    import tempfile
+
+    import search
+
+    # build a tiny index the search functions can read
+    with tempfile.TemporaryDirectory() as td:
+        src = Path(td) / 'src'
+        src.mkdir()
+        (src / 'dQw4w9WgXcQ_clip01.txt').write_text(
+            '[00:01] the cat sat on the mat\n[00:10] dogs run fast\n',
+            encoding='utf-8')
+        db = Path(td) / 'idx.db'
+        search.build_index(paths=[src], db_path=db, verbose=False)
+
+        # point index_path() at our temp db via env var
+        import webui
+        old_env = os.environ.get('YOUTUBE_SEARCH_INDEX')
+        os.environ['YOUTUBE_SEARCH_INDEX'] = str(db)
+        try:
+            import search as _s
+            # search() resolves index_path() at call time
+            res = webui.run_search('cat', mode='fts', limit=5)
+            assert res.get('status') == 'success', res
+            assert res['matches'], res
+            m = res['matches'][0]
+            assert m['jump_url'].startswith('https://youtu.be/')
+            assert 'clip01' in m['path']
+
+            # unknown mode defaults to fts (search backend, not vector)
+            res2 = webui.run_search('cat', mode='bogus', limit=5)
+            assert res2.get('status') == 'success'
+        finally:
+            if old_env is None:
+                os.environ.pop('YOUTUBE_SEARCH_INDEX', None)
+            else:
+                os.environ['YOUTUBE_SEARCH_INDEX'] = old_env
+        print('  ✅ test_webui_run_search_fts_and_vector')
+
+
+# ── pipeline report format (build_report) ───────────────────────────────
+
+def test_pipeline_build_report():
+    import pipeline as pl
+    all_results = [
+        {'status': 'success', 'title': 'Video A',
+         'source_type': 'channel', 'source_name': 'SomeTech',
+         'id': 'aaa111', 'source': 'caption', 'char_count': 500,
+         'chapters_count': 3, 'archive_file': 'C:/tmp/notes/VideoA.md'},
+        {'status': 'failed', 'title': 'Video B', 'source_type': 'playlist',
+         'source_name': 'MyList', 'id': 'bbb222', 'message': '字幕获取失败'},
+    ]
+    report = pl.build_report(all_results, 1, ['1 个频道', '1 个播放列表'],
+                             {'files': 12, 'segments': 40})
+    assert report.startswith('# 🏭 知识库流水线')
+    assert '处理 2 个视频（成功 1），来自 1 个频道 + 1 个播放列表' in report
+    assert '## ✅ Video A' in report
+    assert '📡 频道: SomeTech' in report
+    assert '链接: https://youtu.be/aaa111' in report
+    assert '来源: caption · 500 字符' in report
+    assert '📑 3 章' in report
+    assert '📚 笔记: VideoA.md' in report
+    assert '## ⚠️ Video B' in report
+    assert '📋 播放列表: MyList' in report
+    assert '状态: 字幕获取失败' in report
+    assert '🔎 搜索索引: 12 文件 / 40 段' in report
+    # no index_info → no index line
+    report_no_idx = pl.build_report(all_results, 1, ['1 个频道'], None)
+    assert '搜索索引' not in report_no_idx
+    print('  ✅ test_pipeline_build_report')
+
+
 def run_all():
     tests = [
         test_extract_video_id_formats,
@@ -1235,6 +1345,10 @@ def run_all():
         test_watch_process_channel_mock,
         test_pipeline_extract_json,
         test_pipeline_process_video_mock,
+        test_webui_parse_json_payload,
+        test_webui_truncate_text,
+        test_webui_run_search_fts_and_vector,
+        test_pipeline_build_report,
         test_vector_index_and_search_mock,
         test_vector_search_no_index_graceful,
         test_playlist_title_parse,

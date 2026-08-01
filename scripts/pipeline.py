@@ -286,6 +286,16 @@ def main():
         src_types.append(f'{len(channels)} 个频道')
     if playlists:
         src_types.append(f'{len(playlists)} 个播放列表')
+    print(build_report(all_results, success, src_types, index_info))
+
+
+def build_report(all_results: list, success: int, src_types: list,
+                 index_info: dict | None = None) -> str:
+    """Build the Markdown pipeline report (pure, unit-testable).
+
+    Returns the '# 🏭 知识库流水线' report string. `all_results` items are
+    dicts from process_video (with source_name/source_type/success fields).
+    """
     lines = ['# 🏭 知识库流水线', '',
              f'处理 {len(all_results)} 个视频（成功 {success}），'
              f'来自 {" + ".join(src_types)}', '']
@@ -310,7 +320,7 @@ def main():
         lines.append(f'🔎 搜索索引: {index_info.get("files", 0)} 文件 / '
                      f'{index_info.get("segments", 0)} 段')
         lines.append('')
-    print('\n'.join(lines))
+    return '\n'.join(lines)
 
 
 if __name__ == '__main__':
