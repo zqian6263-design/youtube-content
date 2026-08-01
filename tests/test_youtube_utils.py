@@ -1107,6 +1107,43 @@ def test_clean_transcript_text():
     print('  ✅ test_clean_transcript_text')
 
 
+def test_clean_transcript_english_fillers():
+    from transcribe_whisper import clean_transcript_text
+    # multi-word English fillers stripped at line start
+    out = clean_transcript_text('You know, I think this works\nuh\nI mean, that is correct')
+    lines = [ln for ln in out.split('\n') if ln.strip()]
+    assert lines[0] == 'I think this works'
+    assert lines[1] == 'that is correct'
+    # filler-only line dropped (multi-word too)
+    assert 'uh' not in lines and 'You know' not in lines
+    print('  ✅ test_clean_transcript_english_fillers')
+
+
+def test_clean_transcript_repeated_prefix():
+    from transcribe_whisper import clean_transcript_text
+    # leading repeated word (stammer)
+    assert clean_transcript_text('So so we need to go') == 'So we need to go'
+    assert clean_transcript_text('I I think that is fine') == 'I think that is fine'
+    # leading repeated 2-word phrase
+    assert clean_transcript_text("let's go let's go now") == "let's go now"
+    # case-insensitive collapse, preserves first-occurrence casing
+    assert clean_transcript_text('THE the market is big') == 'THE market is big'
+    # non-repeated line untouched
+    assert clean_transcript_text('He quickly ran to the store') == 'He quickly ran to the store'
+    print('  ✅ test_clean_transcript_repeated_prefix')
+
+
+def test_clean_transcript_keeps_timestamps():
+    from transcribe_whisper import clean_transcript_text
+    # lines already formatted with [MM:SS] must not have repeated-word
+    # collapsing applied to the timestamp
+    out = clean_transcript_text('[00:05] So so we begin\n[00:08] Next next step')
+    lines = [ln for ln in out.split('\n') if ln.strip()]
+    assert lines[0] == '[00:05] So so we begin'
+    assert lines[1] == '[00:08] Next next step'
+    print('  ✅ test_clean_transcript_keeps_timestamps')
+
+
 
 
 
@@ -1205,6 +1242,9 @@ def run_all():
         test_video_jump_url,
         test_pipeline_list_playlist_videos_mock,
         test_clean_transcript_text,
+        test_clean_transcript_english_fillers,
+        test_clean_transcript_repeated_prefix,
+        test_clean_transcript_keeps_timestamps,
     ]
     failures = 0
     for t in tests:

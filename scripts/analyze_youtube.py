@@ -1002,7 +1002,8 @@ def main():
     parser.add_argument('--llm-titles', action='store_true',
                         help='Polish chapter titles via LLM (needs DEEPSEEK_API_KEY)')
     parser.add_argument('--clean', action='store_true',
-                        help='Clean Whisper transcript: drop fillers, merge duplicates')
+                        help='Clean Whisper transcript: drop fillers (呃/嗯/um/you know), '
+                             'collapse repeated words/phrases, merge duplicates')
     parser.add_argument('--format', default=None,
                         choices=['srt', 'vtt', 'lrc', 'txt'],
                         help='Convert subtitles to standard format (srt/vtt/lrc/txt)')

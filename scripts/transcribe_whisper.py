@@ -220,13 +220,17 @@ def transcribe_chunked(args, input_path: str):
 def clean_transcript_text(text: str) -> str:
     """
     Clean up raw Whisper output:
-    - drop filler words (呃/嗯/um/uh) at line starts
+    - drop filler words (呃/嗯/um/uh/you know/i mean) at line starts
+    - collapse leading repeated words / short phrases (stammer artifacts)
     - merge consecutive duplicate lines
     - collapse >2 blank lines
     Returns cleaned text.
     """
 
-    fillers = ('呃', '嗯', '啊', 'um', 'uh', 'hmm', 'erm')
+    fillers = (
+        '呃', '嗯', '啊', 'um', 'uh', 'hmm', 'erm',
+        'you know', 'i mean', 'sort of', 'kind of',
+    )
     out_lines = []
     for raw in text.split('\n'):
         line = raw.strip()
@@ -234,9 +238,10 @@ def clean_transcript_text(text: str) -> str:
             if out_lines and out_lines[-1] != '':
                 out_lines.append('')
             continue
-        # Strip filler prefixes (e.g. "呃，然后" → "然后"; "Um, so" → "so")
+        # Strip filler prefixes (e.g. "呃，然后" → "然后"; "Um, so" → "so";
+        # "You know, I think" → "I think")
         lower = line.lower()
-        # Drop a line that is ONLY filler words (e.g. "呃", "um")
+        # Drop a line that is ONLY filler words (e.g. "呃", "um", "you know")
         if lower in fillers:
             continue
         changed = True
@@ -251,11 +256,50 @@ def clean_transcript_text(text: str) -> str:
                         changed = True
         if not line:
             continue
+        # Collapse a leading repeated word (stammer): "So so we need" → "So we need";
+        # "I I think" → "I think". Word repeated 2+ times at line start.
+        lower = line.lower()
+        if not _starts_with_timestamp(line):
+            line = _collapse_repeated_prefix(line)
         # Merge consecutive duplicates (Whisper often repeats a line)
         if out_lines and out_lines[-1].lower() == line.lower():
             continue
         out_lines.append(line)
     return '\n'.join(out_lines)
+
+
+def _collapse_repeated_prefix(line: str) -> str:
+    """Collapse a leading word or 2-word phrase repeated 2+ times.
+
+    "So so we need"    -> "So we need"
+    "I I think that"   -> "I think that"
+    "let's go let's go now" -> "let's go now"
+    Word counts are compared case-insensitively; the first occurrence's
+    original casing is preserved. Returns the line unchanged if no
+    repetition is found.
+    """
+    words = line.split()
+    if len(words) < 3:
+        return line
+    # --- leading repeated single word ---
+    w0 = words[0].lower()
+    j = 1
+    while j < len(words) and words[j].lower() == w0:
+        j += 1
+    if j >= 2:
+        # keep words[j:] but re-join with original spacing style
+        return ' '.join(words[:1] + words[j:])
+    # --- leading repeated 2-word phrase ---
+    if len(words) >= 4 and words[0].lower() == words[2].lower() \
+            and words[1].lower() == words[3].lower():
+        return ' '.join(words[:2] + words[4:])
+    return line
+
+
+def _starts_with_timestamp(line: str) -> bool:
+    """True if the line begins with a [MM:SS] timestamp (already formatted)."""
+    return bool(re.match(r'^\s*\[\d{1,2}:\d{2}\]', line))
+
 
 
 def eprint(*args, **kwargs):
