@@ -532,8 +532,9 @@ def run_search(q: str, mode: str = 'fts', limit: int = 10,
     search result dict; raises on search-backend failure.
     """
     sys.path.insert(0, str(SCRIPT_DIR))
-    from search import search, vector_search, video_jump_url
     from pathlib import Path as _P
+
+    from search import search, vector_search, video_jump_url
 
     if mode == 'vector':
         result = vector_search(q, limit=limit, context=1, file_filter=file_filter)
