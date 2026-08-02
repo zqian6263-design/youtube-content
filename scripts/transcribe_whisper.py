@@ -95,11 +95,51 @@ def _format_segments_timestamps(segments, offset_sec: float = 0.0) -> str:
     return '\n'.join(lines)
 
 
+def _ensure_cuda_dlls():
+    """Inject CUDA runtime DLLs (cuBLAS) into PATH when the current venv's
+    torch is CPU-only but an Anaconda CUDA env is present. faster-whisper
+    (CTranslate2) needs these DLLs for GPU transcription."""
+    import ctypes
+    if os.path.exists(r"D:\Anaconda\envs\pytorch\Lib\site-packages\torch\lib"):
+        dll_dir = r"D:\Anaconda\envs\pytorch\Lib\site-packages\torch\lib"
+        if dll_dir not in os.environ.get('PATH', ''):
+            os.environ['PATH'] = dll_dir + os.pathsep + os.environ.get('PATH', '')
+        # Preload cuBLAS to surface errors early
+        try:
+            ctypes.CDLL(os.path.join(dll_dir, 'cublas64_12.dll'))
+        except OSError:
+            pass
+
+
+def _resolve_device(device: str, backend: str) -> str:
+    """Resolve 'auto' device. For faster-whisper we can detect CUDA via
+    CTranslate2 even when the main venv's torch is CPU-only."""
+    if device != 'auto':
+        return device
+    try:
+        import torch
+        if torch.cuda.is_available():
+            return 'cuda'
+    except ImportError:
+        pass
+    if backend == 'faster-whisper':
+        try:
+            _ensure_cuda_dlls()
+            import ctranslate2
+            if ctranslate2.get_cuda_device_count() > 0:
+                return 'cuda'
+        except Exception:
+            pass
+    return 'cpu'
+
+
 def _transcribe_file(input_path: str, model_name: str, device: str,
                      language: str, model_dir: str, backend: str,
                      include_timestamps: bool = False) -> dict:
     """Transcribe one audio file (used directly and as process-pool worker)."""
+    device = _resolve_device(device, backend)
     if backend == 'faster-whisper':
+        _ensure_cuda_dlls()
         from faster_whisper import WhisperModel
         model = WhisperModel(
             model_name, device=device, download_root=model_dir, compute_type='int8'
@@ -317,9 +357,10 @@ def main():
     parser.add_argument('--language', default='zh',
                         help='Language code (zh, en, ja, auto). auto = detect')
     parser.add_argument('--model-dir', default='~/.hermes/whisper/models')
-    parser.add_argument('--backend', default='openai',
-                        choices=['openai', 'faster-whisper'],
-                        help='Transcription backend (default: openai)')
+    parser.add_argument('--backend', default='auto',
+                        choices=['auto', 'openai', 'faster-whisper'],
+                        help='Transcription backend: auto (faster-whisper if '
+                             'available, else openai)')
     parser.add_argument('--chunk-minutes', type=int, default=0,
                         help='Split audio into N-minute chunks. 0 = no chunking. '
                              'CPU: parallel across processes; GPU: sequential (OOM-safe)')
@@ -330,6 +371,14 @@ def main():
     parser.add_argument('--clean', action='store_true',
                         help='Clean transcript: drop fillers, merge duplicates')
     args = parser.parse_args()
+
+    # Resolve 'auto' backend: faster-whisper if importable, else openai
+    if args.backend == 'auto':
+        try:
+            import faster_whisper  # noqa: F401
+            args.backend = 'faster-whisper'
+        except ImportError:
+            args.backend = 'openai'
 
     if not os.path.exists(args.input):
         print(json.dumps({"status": "error", "detail": f"File not found: {args.input}"}))

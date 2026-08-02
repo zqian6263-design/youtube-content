@@ -88,9 +88,43 @@ def parse_time_arg(value: str | None) -> float | None:
         return None
 
 
-def run_script(script_path, *args, timeout=300):
-    cmd = [sys.executable, str(script_path)] + list(args)
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+def _cuda_dll_path() -> str | None:
+    """Locate a CUDA runtime DLL directory (cuBLAS etc.) for faster-whisper.
+
+    The main venv's torch is CPU-only (no CUDA DLLs); the user's Anaconda
+    CUDA env ships them under .../torch/lib. Returns the dir or None.
+    """
+    candidates = [
+        Path(r"D:\Anaconda\envs\pytorch\Lib\site-packages\torch\lib"),
+        Path(os.environ.get('CONDA_PREFIX', '')) / 'Lib' / 'site-packages' / 'torch' / 'lib',
+    ]
+    for cand in candidates:
+        if cand and (cand / 'cublas64_12.dll').exists():
+            return str(cand)
+    return None
+
+
+def run_script(script_path, *args, timeout=300, whisper=False):
+    # whisper=True → use WHISPER_PYTHON if set (GPU-enabled interpreter,
+    # e.g. Anaconda env with CUDA torch). Other scripts always use the
+    # main interpreter (they need project deps).
+    if whisper:
+        python = os.environ.get('WHISPER_PYTHON', sys.executable)
+        env = dict(os.environ)
+        # Strip PYTHONPATH so a GPU interpreter doesn't pick up the main
+        # venv's CPU torch (Hermes sets PYTHONPATH to its own venv).
+        env.pop('PYTHONPATH', None)
+        # Inject CUDA DLLs (cuBLAS) for faster-whisper when the main venv
+        # lacks them — e.g. from the Anaconda CUDA env's torch/lib.
+        dll_dir = _cuda_dll_path()
+        if dll_dir and dll_dir not in env.get('PATH', ''):
+            env['PATH'] = dll_dir + os.pathsep + env.get('PATH', '')
+    else:
+        python = sys.executable
+        env = None
+    cmd = [python, str(script_path)] + list(args)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
+                            env=env)
     return result.stdout, result.stderr, result.returncode
 
 
@@ -565,7 +599,7 @@ def run_whisper_pipeline(video_id, video_url, title, whisper_model, device,
     if whisper_language:
         wo_kwargs += ['--language', whisper_language]
 
-    wo, we, wc = run_script(WHISPER_PY, *wo_kwargs, timeout=1800)
+    wo, we, wc = run_script(WHISPER_PY, *wo_kwargs, timeout=1800, whisper=True)
 
     try:
         whisper_result = json.loads(wo)
@@ -870,10 +904,23 @@ def process_one_video(video, args, whisper_model, device,
         langs = [lg.strip() for lg in args.languages.split(',')]
         whisper_language = langs[0][:2] if langs else 'auto'
 
+    # Resolve 'auto' backend: faster-whisper if importable, else openai.
+    # BUT when WHISPER_PYTHON points at a different interpreter (GPU env),
+    # keep 'auto' so the transcription subprocess resolves it against its
+    # OWN environment (the parent's faster_whisper may differ from the
+    # subprocess's — resolving here could crash it or miss the fast path).
+    backend = args.backend
+    if backend == 'auto' and not os.environ.get('WHISPER_PYTHON'):
+        try:
+            import faster_whisper  # noqa: F401
+            backend = 'faster-whisper'
+        except ImportError:
+            backend = 'openai'
+
     return run_whisper_pipeline(
         video_id, video, video_id, whisper_model, device,
         whisper_model_dir, whisper_temp,
-        whisper_language, args.timestamps, args.backend,
+        whisper_language, args.timestamps, backend,
         args.chunk_minutes, args.chunk_workers,
         args.chapters, args.chapter_window_sec,
         args.chapter_min, args.chapter_max, args.chapter_top_words,
@@ -979,9 +1026,10 @@ def main():
                         help='With --playlist: limit to N videos')
     parser.add_argument('--cookies', default=None,
                         help='With --playlist: path to cookies.txt')
-    parser.add_argument('--backend', default='openai',
-                        choices=['openai', 'faster-whisper'],
-                        help='Whisper backend: openai (default) or faster-whisper (4x faster)')
+    parser.add_argument('--backend', default='auto',
+                        choices=['auto', 'openai', 'faster-whisper'],
+                        help='Whisper backend: auto (faster-whisper if available, '
+                             'else openai), openai, or faster-whisper (~4x faster)')
     parser.add_argument('--bilingual', action='store_true',
                         help='Bilingual output: interleave primary + secondary captions')
     parser.add_argument('--chunk-minutes', type=int, default=0,
@@ -1040,9 +1088,17 @@ def main():
 
     # ── Configuration from env ──────────────────────────────────────────
     whisper_model = args.whisper_model or os.environ.get('WHISPER_MODEL', 'small')
-    device = detect_device(args.device or os.environ.get('WHISPER_DEVICE', 'auto'))
+    gpu_python = os.environ.get('WHISPER_PYTHON')
+    if gpu_python:
+        # Whisper runs under a GPU interpreter (e.g. Anaconda CUDA env):
+        # pass 'auto' through so transcribe_whisper.py detects CUDA itself.
+        device = 'auto'
+    else:
+        device = detect_device(args.device or os.environ.get('WHISPER_DEVICE', 'auto'))
     if device == 'cpu' and (args.device or os.environ.get('WHISPER_DEVICE')) in (None, 'auto', ''):
-        eprint('ℹ 未检测到 GPU，使用 CPU 转写（可加 --device cuda 强制）')
+        eprint('ℹ 未检测到 GPU，使用 CPU 转写'
+               + ('（提示：设置 WHISPER_PYTHON 指向 CUDA 环境可用 GPU 转写）'
+                  if not gpu_python else ''))
 
     whisper_model_dir = Path(os.environ.get(
         'WHISPER_MODEL_DIR', str(Path.home() / '.hermes' / 'whisper' / 'models')))
