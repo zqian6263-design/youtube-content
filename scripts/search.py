@@ -164,9 +164,19 @@ def build_index(paths=None, db_path=None, verbose=True):
 
 
 def _search_ascii(conn, query: str, limit: int):
-    """FTS5 MATCH for ASCII queries; returns rows."""
+    """FTS5 MATCH for ASCII queries; returns rows.
+
+    Multi-term queries use OR semantics (AND is too strict for short
+    subtitle segments); BM25 ranking keeps multi-hit rows on top.
+    """
     try:
-        q = ' '.join(query.split())
+        terms = [t.replace('"', '') for t in query.split() if t.strip()]
+        if not terms:
+            return []
+        if len(terms) == 1:
+            q = f'"{terms[0]}"'
+        else:
+            q = ' OR '.join(f'"{t}"' for t in terms)
         rows = conn.execute(
             '''SELECT path, start, text, bm25(subtitles_fts) AS score
                FROM subtitles_fts WHERE subtitles_fts MATCH ? ORDER BY score

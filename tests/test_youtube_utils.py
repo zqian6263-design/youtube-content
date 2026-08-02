@@ -1148,6 +1148,35 @@ def test_clean_transcript_keeps_timestamps():
 
 
 
+def test_search_ascii_or_semantics():
+    """Multi-term ASCII queries use OR (AND was too strict for segments)."""
+    import sqlite3
+    import tempfile
+    from pathlib import Path
+
+    import search
+
+    with tempfile.TemporaryDirectory() as td:
+        conn = sqlite3.connect(Path(td) / 't.db')
+        conn.execute('CREATE VIRTUAL TABLE subtitles_fts USING fts5(path, start, text)')
+        conn.execute('INSERT INTO subtitles_fts VALUES (?,?,?)',
+                     ('a.txt', 0, 'we are no strangers to love'))
+        conn.execute('INSERT INTO subtitles_fts VALUES (?,?,?)',
+                     ('b.txt', 0, 'the rules of the game'))
+        conn.commit()
+        # OR: any term matches
+        r = search._search_ascii(conn, 'strangers mean song', 5)
+        assert len(r) >= 1, 'OR semantics should find the strangers row'
+        # Single term still works
+        r2 = search._search_ascii(conn, 'strangers', 5)
+        assert len(r2) == 1
+        # Empty terms → no crash
+        r3 = search._search_ascii(conn, '   ', 5)
+        assert r3 == []
+        conn.close()
+    print('  ✅ test_search_ascii_or_semantics')
+
+
 def test_detect_chapters_full_pipeline():
     from chapters import detect_chapters, parse_subtitles
     # Simulate a 10-min video with 3 distinct topics
@@ -1233,7 +1262,6 @@ def test_webui_run_search_fts_and_vector():
         old_env = os.environ.get('YOUTUBE_SEARCH_INDEX')
         os.environ['YOUTUBE_SEARCH_INDEX'] = str(db)
         try:
-            import search as _s
             # search() resolves index_path() at call time
             res = webui.run_search('cat', mode='fts', limit=5)
             assert res.get('status') == 'success', res
@@ -1359,6 +1387,7 @@ def run_all():
         test_clean_transcript_english_fillers,
         test_clean_transcript_repeated_prefix,
         test_clean_transcript_keeps_timestamps,
+        test_search_ascii_or_semantics,
     ]
     failures = 0
     for t in tests:
