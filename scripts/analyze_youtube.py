@@ -705,6 +705,37 @@ def _interleave_captions(primary: str, secondary: str,
     return '\n'.join(out)
 
 
+def run_yt_chapters(video_id: str, video_url: str) -> list[dict]:
+    """Export YouTube's native chapters via yt-dlp.
+
+    Runs `yt-dlp --skip-download --dump-json` (short timeout), parses the
+    chapters field, and writes {id}_chapters.json to the output dir.
+    Returns the chapter list; [] on any failure (no native chapters is
+    common — silent degradation, never an error).
+    """
+    import subprocess as _sp
+
+    from youtube_utils import parse_yt_chapters
+    try:
+        r = _sp.run(
+            ['yt-dlp', '--no-warnings', '--skip-download', '--dump-json',
+             video_url],
+            capture_output=True, text=True, timeout=60,
+        )
+        if r.returncode != 0:
+            return []
+        chapters = parse_yt_chapters(r.stdout)
+        if chapters:
+            jpath = OUTPUT_DIR / f'{video_id}_chapters.json'
+            jpath.write_text(
+                json.dumps(chapters, ensure_ascii=False, indent=2),
+                encoding='utf-8')
+            eprint(f'📑 原生章节导出: {len(chapters)} 章 → {jpath.name}')
+        return chapters
+    except Exception:
+        return []
+
+
 def process_one_video(video, args, whisper_model, device,
                       whisper_model_dir, whisper_temp):
     """Process a single video; returns a JSON result dict."""
@@ -824,6 +855,15 @@ def process_one_video(video, args, whisper_model, device,
                         result["chapters"] = chapters
                         result["chapters_file"] = ch_path
                         eprint(f'📑 章节检测完成: {len(chapters)} 章')
+
+                # Optional: export YouTube native chapters (differentiator:
+                # YouTube shows them, we make them exportable)
+                if args.yt_chapters:
+                    yt_ch = run_yt_chapters(video_id, video)
+                    if yt_ch:
+                        result["yt_chapters"] = yt_ch
+                        result["yt_chapters_file"] = str(
+                            OUTPUT_DIR / f'{video_id}_chapters.json')
 
                 # Optional: convert subtitles to srt/vtt/lrc/txt
                 if args.format:
@@ -1039,6 +1079,10 @@ def main():
                         help='Max parallel chunk workers on CPU (default: cpu_count)')
     parser.add_argument('--chapters', action='store_true',
                         help='Auto-detect chapters from the transcript (TextTiling)')
+    parser.add_argument('--yt-chapters', action='store_true',
+                        help='Export YouTube native chapters (from yt-dlp JSON) '
+                             'to {id}_chapters.json + print. YouTube shows them; '
+                             'we make them exportable.')
     parser.add_argument('--chapter-window-sec', type=float, default=60.0,
                         help='Chapter detection window size in seconds (default: 60)')
     parser.add_argument('--chapter-min', type=int, default=3,

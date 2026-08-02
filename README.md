@@ -2,7 +2,7 @@
 
 # 🎬 YouTube Content Tool
 
-**一键提取 YouTube 字幕 / Whisper 音频转写 / 章节检测 / 翻译 全家桶**
+**一键提取 YouTube 字幕 / Whisper 音频转写 / 章节导出 / 双语对照 / 知识库问答 全家桶**
 
 [![Python](https://img.shields.io/badge/Python-3.9+-blue?logo=python)](https://python.org)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
@@ -21,21 +21,25 @@
 
 ---
 
-## ✨ 功能特性
+## ✨ 功能特性（定位：视频文本资产层——拿 → 存 → 用）
 
-| 特性 | 说明 |
-|------|------|
-| 🎯 **一键提取** | 支持链接 / 短链接 / 视频 ID / 播放列表，自动提取字幕 |
-| 📡 **双引擎兜底** | youtube-transcript-api 优先 → yt-dlp 兜底，云 IP 被封也能用 |
-| 🎙 **Whisper 转写** | 无字幕视频自动下载音频转写；支持 openai-whisper / faster-whisper 双后端 |
-| ⚡ **分块并行** | 长视频自动切块多进程并行转写（CPU 快 4-6 倍） |
-| 📑 **章节检测** | TextTiling 算法自动分割话题，输出带时间戳的章节目录 |
-| 🎬 **格式转换** | SRT / VTT / LRC / TXT 一键互转（剪映、Premiere、播放器、歌词） |
-| 🌐 **LLM 翻译** | 字幕自动翻译成中文/日文等（DeepSeek / OpenAI 兼容 API） |
-| ⏱ **时间范围** | `--from 10:00 --to 20:00` 只处理指定片段 |
-| 👥 **双语字幕** | 中英双语时间轴对齐交错输出，学外语神器 |
-| 💾 **智能缓存** | SQLite 缓存字幕和转写结果，重复分析秒回 |
-| 🆓 **零配置** | 基础功能无需 API Key、无需 Cookie |
+> YouTube 提供"看"（视频/章节/字幕/机翻）；本工具提供 YouTube **没有**的：
+> **导出**（字幕/章节/对照）→ **沉淀**（笔记/归档）→ **使用**（搜索/问答/引用）
+
+| 特性 | 说明 | 差异化 |
+|------|------|--------|
+| 🎯 **一键提取** | 支持链接 / 短链接 / 视频 ID / 播放列表，自动提取字幕 | 导出为干净文本 |
+| 📡 **双引擎兜底** | youtube-transcript-api 优先 → yt-dlp 兜底，云 IP 被封也能用 | 稳定性 |
+| 🎙 **Whisper 转写** | 无字幕视频自动下载音频转写；GPU 加速（GTX 1080 实测 12x 实时） | YouTube 不提供 |
+| 📑 **原生章节导出** | `--yt-chapters` 导出 YouTube 自带章节为 JSON（YouTube 只能看） | **差异化核心** |
+| 📑 **章节检测** | `--chapters` TextTiling 自动分割话题（可选增强，非默认） | 无原生章节时兜底 |
+| 🎬 **格式转换** | SRT / VTT / LRC / TXT 一键互转（剪映、Premiere、播放器、歌词） | 导出生态 |
+| 🌐 **高质量翻译** | LLM 翻译（DeepSeek/OpenAI），非 YouTube 机翻 | 质量+可导出 |
+| 👥 **双语对照** | `--bilingual-translate` 中英双语时间轴对齐交错输出（YouTube 只能看不能导出） | **差异化核心** |
+| 🔍 **知识库** | FTS 全文 + 向量语义搜索 + RAG 问答（跨视频，答案带时间戳跳转） | **差异化核心** |
+| ⏱ **时间范围** | `--from 10:00 --to 20:00` 只处理指定片段 | 灵活 |
+| 💾 **智能缓存** | SQLite 缓存字幕和转写结果，重复分析秒回 | 效率 |
+| 🆓 **零配置** | 基础功能无需 API Key、无需 Cookie | 门槛 |
 
 ---
 

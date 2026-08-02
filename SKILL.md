@@ -86,12 +86,10 @@ any authentication. Captions are fetched via YouTube's public endpoints.
 | `watch_channel.py` | Watch channel/playlist for new videos → Markdown report (cron-friendly). |
 | `webui.py` | Flask web UI: extract/transcribe + knowledge base page `/kb` (search, RAG ask, notes). |
 | `search.py` | Full-text search (FTS5 + CJK bigram), vector semantic search (`--vector`), and `--ask` RAG Q&A. |
-| `feishu_bot.py` | Feishu bot: send a YouTube link → get caption/transcript reply (needs app credentials). |
 | `pipeline.py` | One-command pipeline: watch → extract → enhance → archive → reindex → report. |
-| `fetch_audio_youtube.py` | Download audio stream via yt-dlp, convert to WAV. Supports `--start-sec/--end-sec`, cookies, auto-retry, bot/age detection. |
-| `youtube_utils.py` | Shared utilities: ID parsing, .env loading, VTT parsing, GPU detection. |
+| `youtube_utils.py` | Shared utilities: ID parsing, .env loading, VTT parsing, GPU detection, native-chapter parsing. |
 | `cache.py` | SQLite cache (subtitles + transcripts + translations, 7-day TTL). |
-| `tests/test_youtube_utils.py` | 45 unit tests. Run: `python tests/test_youtube_utils.py` |
+| `tests/test_youtube_utils.py` | 74 unit tests. Run: `python tests/test_youtube_utils.py` |
 
 ## Usage Strategy
 
@@ -145,11 +143,19 @@ python SKILL_DIR/scripts/analyze_youtube.py "URL" --languages zh-Hans,zh-Hant,en
 # Whisper language override (auto = detect, zh/en/ja = force)
 python SKILL_DIR/scripts/analyze_youtube.py "URL" --auto --whisper-language auto
 
+# Export YouTube native chapters (differentiator: YouTube shows, we export)
+python SKILL_DIR/scripts/analyze_youtube.py "URL" --yt-chapters   # → {id}_chapters.json
+
 # Use CPU for Whisper (no CUDA)
 python SKILL_DIR/scripts/analyze_youtube.py "URL" --force-whisper --device cpu
 
 # Device auto-detection (default): GPU if available, else CPU
 python SKILL_DIR/scripts/analyze_youtube.py "URL" --force-whisper --device auto
+
+# GPU transcription via a CUDA-enabled interpreter (e.g. Anaconda env):
+#   set in .env:  WHISPER_PYTHON=D:\Anaconda\envs\pytorch\python.exe
+#   (WHISPER_DEVICE=auto → transcribe script detects CUDA itself)
+#   ~9x realtime on GTX 1080 (30-min video ≈ 3-4 min vs 30-60 min CPU)
 
 # Full auto with custom model
 python SKILL_DIR/scripts/analyze_youtube.py "URL" --auto --whisper-model base --device auto

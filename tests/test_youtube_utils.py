@@ -1177,6 +1177,22 @@ def test_search_ascii_or_semantics():
     print('  ✅ test_search_ascii_or_semantics')
 
 
+def test_parse_yt_chapters():
+    """Parse YouTube native chapters from a yt-dlp JSON dump."""
+    from youtube_utils import parse_yt_chapters
+    j = '{"chapters": [{"start_time": 0, "title": "Intro"}, {"start_time": 43, "title": "Overview"}, {"start_time": 3725, "title": "Long"}]}'
+    out = parse_yt_chapters(j)
+    assert len(out) == 3
+    assert out[0] == {"start_ts": "00:00", "title": "Intro"}
+    assert out[2] == {"start_ts": "1:02:05", "title": "Long"}  # 3725s -> H:MM:SS
+    # No chapters -> []
+    assert parse_yt_chapters('{"chapters": null}') == []
+    # Bad input -> []
+    assert parse_yt_chapters('not json') == []
+    assert parse_yt_chapters('') == []
+    print('  ✅ test_parse_yt_chapters')
+
+
 def test_detect_chapters_full_pipeline():
     from chapters import detect_chapters, parse_subtitles
     # Simulate a 10-min video with 3 distinct topics
@@ -1388,6 +1404,7 @@ def run_all():
         test_clean_transcript_repeated_prefix,
         test_clean_transcript_keeps_timestamps,
         test_search_ascii_or_semantics,
+        test_parse_yt_chapters,
     ]
     failures = 0
     for t in tests:

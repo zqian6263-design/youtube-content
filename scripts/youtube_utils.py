@@ -222,3 +222,22 @@ def emit_json(data: dict, exit_code: int = 0):
     """Print JSON to stdout and exit. Keeps stdout clean from progress bars."""
     print(json.dumps(data, ensure_ascii=False))
     sys.exit(exit_code)
+
+
+def parse_yt_chapters(json_text: str) -> list[dict]:
+    """Parse YouTube's native chapters from a yt-dlp JSON dump.
+
+    Returns [{start_ts: 'MM:SS'|'H:MM:SS', title}, ...] or [] on any failure.
+    """
+    try:
+        data = json.loads(json_text)
+        chapters = data.get('chapters') or []
+        out = []
+        for c in chapters:
+            start = int(c.get('start_time', 0))
+            h, m, s = start // 3600, (start % 3600) // 60, start % 60
+            ts = f'{h}:{m:02d}:{s:02d}' if h else f'{m:02d}:{s:02d}'
+            out.append({"start_ts": ts, "title": str(c.get('title', ''))})
+        return out
+    except Exception:
+        return []
